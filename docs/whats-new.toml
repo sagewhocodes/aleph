@@ -10,6 +10,22 @@
 # only a build with that feature carries them.
 
 [[entry]]
+id = "2.1.0-keys"
+date = "2026-10-30"
+title = "Keys that changed: ctrl+q, [ ] and Tab"
+notes = [
+  "ctrl+q is the way out: while typing into an agent it gives the keys back to Aleph, pressed again it goes to Fleet. ctrl+] now reaches the agent.",
+  "[ ] step through sessions on every machine, ctrl+[ ] through machines (( ) where a terminal can't tell ctrl+[ from esc). While typing, alt+, and alt+. step sessions.",
+  "Tab cycles the views everywhere: Fleet, Focus while it's open, Monitor, Inbox, Settings.",
+  "What Tab did before: Monitor's pages are left and right, the Inbox's filters f and F, Settings' sections [ ], the Doctor's arrangement v. Tile's windows moved to w and W, the timeline tree's prompts to ( ).",
+]
+commits = [
+  "ctrl+q gives the keys back, then goes to Fleet",
+  "[ ] step through sessions on every machine, ctrl+[ ] through machines",
+  "Tab cycles the views everywhere",
+]
+
+[[entry]]
 id = "2.1.0-fixes"
 date = "2026-10-30"
 title = "Compaction, forms of questions, and more on every row"

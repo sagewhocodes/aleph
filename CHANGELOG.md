@@ -2,6 +2,17 @@
 
 ## 2.1.0 — in progress
 
+### Keys that changed
+- **`ctrl+q` is the way out.** While typing into an agent it gives the keys back to Aleph; pressed again it goes to Fleet.
+  `ctrl+]` isn't Aleph's any more and reaches the agent. The prefix and then `ctrl+q` sends it to the pane, for a shell
+  frozen by `ctrl+s`.
+- **`[ ]` step through sessions, on every machine; `ctrl+[ ]` through machines.** `( )` do the machines too, where a
+  terminal can't tell `ctrl+[` from esc. While typing the brackets are the agent's: `alt+,` `alt+.` or the prefix and
+  `[ ]` step sessions. Monitor keeps `[ ]` for machines, except Timeline's list.
+- **Tab cycles the views everywhere:** Fleet, Focus while it's open, Monitor, Inbox, Settings. Monitor's pages are now
+  `←` `→`, the Inbox's filters `f` `F`, Settings' sections `[ ]` and the Doctor's arrangement `v`.
+- Tile's windows moved to `w` `W`, the timeline tree's prompts to `( )`.
+
 ### The remaining fixes
 - **Compaction has its own state.** A session compacting shows "compacting" and stays working, and the end of a
   compaction no longer counts as a finished turn.
