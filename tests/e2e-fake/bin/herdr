@@ -73,7 +73,7 @@ case "$1 $2" in
     lbl=$(opt --label "$@"); [[ -n $FAILTAB && $1 == tab ]] && err boom "tab create exploded"
     updt --arg l "$lbl" --arg t "w1:t$n" '.result.tabs += [{"tab_id":$t,"label":$l}]'
     # a shell's tab has a plain pane in it, as herdr's snapshot would say
-    case $lbl in shell_*) P=$ST/panes_$host.json; [[ -f $P ]] || echo '[]' > "$P"
+    case $lbl in shell_*|agentsdk_*) P=$ST/panes_$host.json; [[ -f $P ]] || echo '[]' > "$P"
       jq --arg t "w1:t$n" --arg p "w1:p$n" --arg c "$(opt --cwd "$@")" '. + [{pane_id:$p,tab_id:$t,cwd:$c}]' "$P" > "$P.n" && mv "$P.n" "$P";; esac
     echo "{\"result\":{\"type\":\"tab_created\",\"tab\":{\"tab_id\":\"w1:t$n\"},\"root_pane\":{\"pane_id\":\"w1:p$n\"}}}";;
   "worktree remove") echo "WORKTREE-REMOVE $(opt --workspace "$@")" >> "$ST/log"; ok;;

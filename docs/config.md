@@ -100,7 +100,7 @@ dashboard's Settings tab edits them. Per-machine settings are `host.<alias>.<key
 
 | Setting | TOML | Default | What it does |
 |---|---|---|---|
-| `agent` | `sessions.agent` | `claude` (claude \| codex \| opencode \| omp \| pi \| cursor \| devin \| gemini \| agy \| cline \| mastracode \| copilot \| kimi \| kiro \| droid \| amp \| grok \| hermes \| kilo \| qodercli \| qwen \| letta \| maki \| muse \| crush \| commandcode \| prime) | default agent for new sessions (aleph agents lists them) |
+| `agent` | `sessions.agent` | `claude` (claude \| codex \| opencode \| omp \| pi \| cursor \| devin \| gemini \| agy \| cline \| mastracode \| copilot \| kimi \| kiro \| droid \| amp \| grok \| hermes \| kilo \| qodercli \| qwen \| letta \| maki \| muse \| crush \| commandcode \| prime \| agentsdk) | default agent for new sessions (aleph agents lists them) |
 | `agents` | `fleet.show_agents` | `all` | which agents' sessions are listed: all, or agent ids (claude,codex) |
 | `agents.install_timeout` | `agents.install_timeout` | `3600` (number) | seconds an agent's installer may run (setup and aleph agents install) before it's stopped — then Aleph checks whether the agent is there anyway; long enough for a big clone and a large download on a slow link, and x on setup's install screen stops one sooner |
 | `agents.install_quiet` | `agents.install_quiet` | `60` (number) | seconds of silence after an agent's installer asks something (a line ending in ?, [y/N], a login menu) before it's stopped — installers run with no terminal, so nothing can answer; a silent clone or build isn't a question and goes on |

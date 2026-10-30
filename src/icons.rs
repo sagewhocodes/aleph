@@ -351,7 +351,7 @@ pub fn brand(id: &str) -> (&'static str, Color) {
         "opencode" => ("⌬", Color::Rgb(250, 178, 131)),
         "gemini" => ("✦", Color::Rgb(66, 133, 244)),
         "copilot" => ("◈", Color::Rgb(137, 87, 229)),
-        "cursor" => ("▲", Color::Rgb(220, 220, 220)),
+        "cursor" | crate::agentsdk::ID => ("▲", Color::Rgb(220, 220, 220)),
         "devin" => ("◆", Color::Rgb(80, 200, 160)),
         "amp" => ("↯", Color::Rgb(255, 92, 92)),
         "droid" => ("⬢", Color::Rgb(255, 150, 50)),

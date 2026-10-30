@@ -152,6 +152,9 @@ fn complete(q: &str, name: &str) -> String {
 fn tags(markers: &[String], git: bool) -> Vec<(&'static str, Color)> {
     let has = |m: &str| markers.iter().any(|x| x == m);
     let mut v = Vec::new();
+    if crate::agentsdk::is_project(markers) {
+        v.push(("sdk", c::ACCENT()));
+    }
     // agent instruction files: Claude Code's, and the shared AGENTS.md
     if has("CLAUDE.md") {
         v.push(("claude", c::ACCENT()));
@@ -194,6 +197,8 @@ pub struct App {
     choosing: bool,
     /// `t` was the key that picked: a terminal, not an agent
     want_terminal: bool,
+    /// `S`: an Agent SDK session, not an agent
+    want_sdk: bool,
     /// a terminal is what this browse is for (ctrl+t): `i` opens one
     terminal_only: bool,
     ttl: u64,
@@ -298,6 +303,7 @@ impl App {
             },
             choosing: o.choosing,
             want_terminal: false,
+            want_sdk: false,
             terminal_only: o.terminal,
             ttl: o.ttl,
             cache,
@@ -506,6 +512,10 @@ impl App {
             self.done = Some(Some(Picked::Terminal(target)));
             return;
         }
+        if self.want_sdk {
+            self.done = Some(Some(Picked::Sdk(target)));
+            return;
+        }
         let mut here: Vec<Session> = self.sessions_in(&target).into_iter().cloned().collect();
         if here.is_empty() && real != target {
             here = self.sessions_in(&real).into_iter().cloned().collect();
@@ -635,6 +645,18 @@ impl App {
             !incl_hidden && ignore::hidden(name),
             !self.show_ignored && self.rules.ignored(name),
         )
+    }
+
+    /// The folder `i` would start in is an Agent SDK project, as far as it's been read.
+    fn sdk_project(&self) -> bool {
+        let rows = self.rows().0;
+        let target = match rows.get(self.sel) {
+            Some(row) if row.kind != Kind::Up => self.row_path(row),
+            _ => self.cwd.clone(),
+        };
+        target
+            .and_then(|p| self.infos.get(&p))
+            .is_some_and(|(info, _)| crate::agentsdk::is_project(&info.markers))
     }
 
     /// Visible rows plus how many folders were hidden / ignored. With a query,
@@ -1109,6 +1131,10 @@ impl App {
             }
             KeyCode::Char('t') => {
                 self.want_terminal = true;
+                self.enter(r);
+            }
+            KeyCode::Char('S') if self.sdk_project() => {
+                self.want_sdk = true;
                 self.enter(r);
             }
             KeyCode::Char('n') => {
@@ -2098,10 +2124,17 @@ impl App {
                         },
                     ),
                     ("t", "terminal"),
+                    (
+                        if self.sdk_project() { "S" } else { "n" },
+                        if self.sdk_project() {
+                            "Agent SDK"
+                        } else {
+                            "new folder"
+                        },
+                    ),
                     ("enter →", "open"),
                     ("←", "back"),
                     ("/", "search"),
-                    ("n", "new folder"),
                     ("r", "refresh"),
                     if jump {
                         ("tab", "complete")
@@ -2178,6 +2211,9 @@ impl App {
 fn chips(markers: &[String]) -> Vec<(&'static str, Color)> {
     let has = |m: &str| markers.iter().any(|x| x == m);
     let mut v = Vec::new();
+    if crate::agentsdk::is_project(markers) {
+        v.push(("Agent SDK", c::ACCENT()));
+    }
     if has("CLAUDE.md") {
         v.push(("CLAUDE.md", c::ACCENT()));
     }
@@ -2282,6 +2318,8 @@ pub enum Picked {
     Attach(Session),
     /// `t`: a terminal in this folder
     Terminal(Vec<u8>),
+    /// `S`: `agent-sdk dev` in this folder
+    Sdk(Vec<u8>),
 }
 
 /// Run the browser on an already-open screen. Returns the chosen remote

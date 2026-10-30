@@ -223,7 +223,15 @@ pub const CREW: &[(&[&str], &[&str])] = &[
         ],
     ),
     (
-        &["cursor", "copilot", "cline", "kilo", "kiro", "devin"],
+        &[
+            "cursor",
+            crate::agentsdk::ID,
+            "copilot",
+            "cline",
+            "kilo",
+            "kiro",
+            "devin",
+        ],
         &[
             "trail", "ridge", "pass", "fjord", "delta", "atlas", "beacon", "summit", "bluff",
             "gorge",

@@ -1250,6 +1250,13 @@ impl Herdr {
         pane: &str,
         args: &[String],
     ) -> Result<(), String> {
+        let sdk_args;
+        let args = if agent == crate::agentsdk::ID {
+            sdk_args = crate::agentsdk::default_args(args);
+            &sdk_args[..]
+        } else {
+            args
+        };
         let reg = crate::agents::find(agent);
         let exe = reg.map_or(agent, |r| r.exe());
         let hkind = match reg.map(|r| r.launch()) {
@@ -1328,7 +1335,10 @@ impl Herdr {
         if let Some(a) = crate::agents::find(exe) {
             let _ = self.display_agent(pane, a.name);
         }
-        let _ = self.rename_agent_later(pane, name);
+        // herdr never sees this one as an agent: its tab's label names it
+        if exe != crate::agentsdk::EXE {
+            let _ = self.rename_agent_later(pane, name);
+        }
         Ok(())
     }
 
@@ -2261,9 +2271,9 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
             .iter()
             .find(|(t, _)| *t == tab)
             .map_or(String::new(), |x| x.1.clone());
-        let ours = label
-            .split_once('_')
-            .is_some_and(|(p, _)| p == crate::agents::SHELL);
+        let prefix = label.split_once('_').map(|(p, _)| p);
+        let sdk = prefix == Some(crate::agentsdk::ID);
+        let ours = sdk || prefix == Some(crate::agents::SHELL);
         let name = names::from_label(&label);
         out.push(Session {
             host: String::new(),
@@ -2277,7 +2287,11 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
             pane_id: pane,
             tab_id: tab,
             label,
-            agent: crate::agents::SHELL.into(),
+            agent: if sdk {
+                crate::agentsdk::ID.into()
+            } else {
+                crate::agents::SHELL.into()
+            },
             plain: !ours,
             ..Default::default()
         });

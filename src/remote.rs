@@ -51,7 +51,7 @@ pub const HELPER: &str = concat!(
     r#"if test "$o" = I; then d=0; n=0; for e in * .*; do case $e in .|..) continue;; esac; "#,
     r#"if test -d "$e"; then d=$((d+1)); elif test -e "$e"; then n=$((n+1)); fi; done; "#,
     r#"printf "%s\tN\t%s\t%s\t%s\n" "$i" "$m" "$d" "$n"; "#,
-    r#"for k in CLAUDE.md AGENTS.md README.md Cargo.toml package.json pyproject.toml requirements.txt setup.py go.mod Makefile CMakeLists.txt Dockerfile docker-compose.yml flake.nix .venv; do "#,
+    r#"for k in CLAUDE.md AGENTS.md README.md Cargo.toml package.json pyproject.toml requirements.txt setup.py go.mod Makefile CMakeLists.txt Dockerfile docker-compose.yml flake.nix .venv bot/instructions.md bot/agent.ts; do "#,
     r#"test -e "$k" && printf "%s\tF\t%s\n" "$i" "$k"; done; "#,
     r#"if test -f .git/HEAD; then read -r h < .git/HEAD; h=${h#ref: refs/heads/}; printf "%s\tB\t%s\n" "$i" "$h"; "#,
     r#"if command -v git >/dev/null 2>&1; then c=$(git log -1 --format=%h%x09%cr%x09%s 2>/dev/null | head -n 1); "#,

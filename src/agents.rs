@@ -439,6 +439,14 @@ pub const ALL: &[Agent] = &[
         install: "curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh",
         ..a("prime", "Prime Agent")
     },
+    Agent {
+        // Cursor's agents as code: the docs' package, `@cursor/bdk` before it; `bdk`
+        // still runs. herdr doesn't know it: its state is the pane's foreground
+        exes: &[crate::agentsdk::EXE],
+        aliases: &[crate::agentsdk::EXE, "bdk", "cursor-sdk", "cursor-agent-sdk"],
+        install: crate::agentsdk::INSTALL,
+        ..a(crate::agentsdk::ID, "Agent SDK")
+    },
 ];
 
 /// Ids, for the `agent` setting's choices (kept in sync with ALL by a test).
@@ -470,6 +478,7 @@ pub const IDS: &[&str] = &[
     "crush",
     "commandcode",
     "prime",
+    crate::agentsdk::ID,
 ];
 
 /// What to call a session's agent in messages: the registry's short name
@@ -516,6 +525,11 @@ pub fn many_models(kind: &str) -> bool {
 
 /// Not an agent: a herdr tab with just your shell in it (`aleph local shell`).
 pub const SHELL: &str = "shell";
+
+/// herdr can't say what it's doing: what runs in the pane's foreground does.
+pub fn state_from_process(agent: &str) -> bool {
+    agent == SHELL || agent == crate::agentsdk::ID
+}
 
 /// The name of a machine's standing terminal (`shell.ready`).
 pub const READY_SHELL: &str = "ready";

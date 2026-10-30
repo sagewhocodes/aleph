@@ -739,7 +739,7 @@ fn note_command(
     (was_working, scanned): (bool, bool),
     min_secs: impl Fn() -> u64,
 ) {
-    if s.agent != crate::agents::SHELL {
+    if !crate::agents::state_from_process(&s.agent) {
         return;
     }
     let k = s.key();
@@ -1329,7 +1329,8 @@ impl Fleet {
                 .sessions
                 .iter()
                 .filter(|s| {
-                    matches!(s.status.as_str(), "idle" | "done") && s.agent != crate::agents::SHELL
+                    matches!(s.status.as_str(), "idle" | "done")
+                        && !crate::agents::state_from_process(&s.agent)
                 })
                 .map(|s| (s.pane_id.clone(), s.status.clone()))
                 .collect();
@@ -1372,7 +1373,7 @@ impl Fleet {
             let panes: Vec<String> = h
                 .sessions
                 .iter()
-                .filter(|s| s.agent == crate::agents::SHELL)
+                .filter(|s| crate::agents::state_from_process(&s.agent))
                 .map(|s| s.pane_id.clone())
                 .collect();
             if !due || panes.is_empty() {
@@ -1410,7 +1411,7 @@ impl Fleet {
             let panes: Vec<String> = h
                 .sessions
                 .iter()
-                .filter(|s| s.status == "working" && s.agent != crate::agents::SHELL)
+                .filter(|s| s.status == "working" && !crate::agents::state_from_process(&s.agent))
                 .map(|s| s.pane_id.clone())
                 .collect();
             if !due || panes.is_empty() {

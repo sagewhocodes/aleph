@@ -8,6 +8,7 @@ mod adopt;
 mod agentcmd;
 mod agentinstall;
 mod agents;
+mod agentsdk;
 mod agentsetup;
 mod agentwatch;
 mod ask;
@@ -172,6 +173,7 @@ pub const COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("hub", "", "herdr's own window with every machine (ctrl+b w)", "Fleet"),
     ("status", "[--short | --json | --watch]", "counts: working · need you · done", "Fleet"),
     ("stats", "[--json]", "CPU · GPU · memory · top processes on every machine", "Fleet"),
+    ("sdk", "[status | projects [DIR] | dev [DIR] | validate [DIR] | run [DIR] -m TEXT] [--host H]", "Cursor's Agent SDK: agents as code, run and watched as sessions", "Fleet"),
     ("services", "[--host H] [--json]", "local LLM servers and AI gateways on every machine (Ollama, LM Studio, vLLM, …)", "Fleet"),
     ("usage", "[24h | 7d | 30d | 6mo | this-week | A..B | all] [--by host|agent|account|model|effort|project|day|hour|session] [--host H] [--agent A] [--account X] [--stats] [--compare] [--json | --csv] | accounts | sources | script | sync | on | off | prune", "tokens, requests, prompts, active time and cost from the agents' own logs", "Fleet"),
     ("peek", "<name | host:name> [-n N] [--ansi] [--json]", "a session's recent output, without attaching", "Sessions"),
@@ -284,6 +286,7 @@ const PIPE_OK: &[&str] = &[
     "approve",
     "stats",
     "services",
+    "sdk",
     "usage",
     "timeline",
     "peek",
@@ -576,6 +579,7 @@ fn main() -> ExitCode {
         Some("status") => cli::status(a),
         Some("stats") => statscmd::stats(a),
         Some("services") => servicescmd::cmd(a),
+        Some("sdk") => agentsdk::cmd(a),
         Some("usage") => usage::cmd::cmd(a),
         Some("timeline") => timeline::cmd(a),
         Some("peek") => statscmd::peek(a),
@@ -721,6 +725,20 @@ fn browse_cmd(a: Args) -> ExitCode {
         // t: the same with no agent, a terminal in that folder
         Ok(Some(browse::Picked::Terminal(d))) => {
             na.opts.agent = agents::SHELL.into();
+            na.opts.dir = Some(d);
+            cli::fill_names(&mut na.opts);
+            let (tui, o) = launch::run(
+                tui,
+                &t,
+                launch::Job::New(na.opts),
+                false,
+                theme::machine(&a.cfg, &t.ssh),
+            );
+            cli::launched(&a.cfg, &t, tui, o)
+        }
+        // S: agent-sdk dev in that folder
+        Ok(Some(browse::Picked::Sdk(d))) => {
+            na.opts.agent = agentsdk::ID.into();
             na.opts.dir = Some(d);
             cli::fill_names(&mut na.opts);
             let (tui, o) = launch::run(
@@ -1390,8 +1408,19 @@ const DETAILS: &[(&str, &[&str])] = &[
         "  aleph theme herdr [--apply]  colour herdr's sidebar: machine labels + session hues",
         "  aleph theme machines [--apply]  give each machine's herdr its own accent colour",
     ]),
-    ("services", &[
-        "Local LLM servers and AI gateways on each machine: Ollama, LM Studio, llama.cpp, vLLM,",
+    ("sdk", &[
+        "Cursor's Agent SDK (cursor.com/docs/agent-sdk): an agent as a folder of Markdown and TypeScript.",
+        "Each start is a session: Fleet shows it working while it runs and tells you when it finishes.",
+        "  status            agent-sdk, Node and whether you're signed in, per machine",
+        "  projects [DIR]    the projects under a folder (a package.json beside bot/instructions.md)",
+        "  dev [DIR]         agent-sdk dev: the local server and playground",
+        "  validate [DIR]    agent-sdk validate --dir .",
+        "  run [DIR] -m TEXT agent-sdk run --dir . --message TEXT (-m again for another turn)",
+        "  --host H --name N  --json",
+        "Signing in is yours: agent-sdk login opens a browser, and Aleph never touches what it stores.",
+        "Tokens, cost and deployed agents aren't shown yet.",
+    ]),
+    ("services", &[        "Local LLM servers and AI gateways on each machine: Ollama, LM Studio, llama.cpp, vLLM,",
         "TGI, LiteLLM, LocalAI, Jan, text-generation-webui, KoboldCpp, Open WebUI, SGLang, TabbyAPI,",
         "Aphrodite, mlx-lm, GPT4All, Xinference, Triton, TensorRT-LLM, llama-swap — version, port,",
         "health, models (loaded first) and VRAM. Found by their processes or by HTTP answers that",

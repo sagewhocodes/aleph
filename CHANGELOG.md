@@ -2,6 +2,18 @@
 
 ## 2.1.0 — in progress
 
+### Cursor's Agent SDK
+- **Run and watch agents written as code.** `aleph sdk dev`, `validate` and `run -m "…"` start a project as a session, on any
+  machine. It's on Fleet like any other: working while the command runs, with the command on the row, and it tells you when
+  it finishes. Its screen opens in Focus. It's also in the `n` form's agent list, and the folder browser marks a project and
+  starts one with `S`.
+- `aleph sdk status` shows, per machine, its version, whether Node is new enough and whether you're signed in.
+  `aleph sdk projects [DIR]` finds them.
+- **Signing in stays yours.** `agent-sdk login` opens a browser, and Aleph only asks `agent-sdk whoami` for its exit code,
+  never what it prints. Tokens, cost and deployed agents aren't shown yet.
+- The package is `@grok/agent-sdk`, as Cursor's docs say. `@cursor/agent-sdk`, the name in the announcement, doesn't exist
+  on npm.
+
 ### Monitor's Timeline, your way
 - **`M` lists only the machine on the strip,** and follows it when you move to another. `C` hides the conversation panel so
   the list has the width (`G` still opens the turn view). Both are saved.

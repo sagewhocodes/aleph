@@ -175,6 +175,12 @@ pub fn os(name: &str) -> Option<&'static Logo> {
 /// An agent's logo by id, kind, executable or alias (`cc`, `cursor-agent`).
 pub fn agent(id: &str) -> Option<&'static Logo> {
     let id = crate::agents::find(id).map_or(id.trim(), |a| a.id);
+    // Cursor's own
+    let id = if id == crate::agentsdk::ID {
+        "cursor"
+    } else {
+        id
+    };
     find(Kind::Agent, id)
 }
 

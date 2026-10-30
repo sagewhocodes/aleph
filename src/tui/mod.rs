@@ -3808,6 +3808,18 @@ pub fn run_dashboard_in(tui: Tui, cfg: Config, start: Start) -> std::process::Ex
                     Ok(Some(crate::browse::Picked::Terminal(dir))) => {
                         quick::shell(&mut d, &target.ssh, Some(&crate::path::show(&dir)));
                     }
+                    Ok(Some(crate::browse::Picked::Sdk(dir))) => {
+                        let args = ["--host".to_string(), target.ssh.clone()];
+                        match crate::cli::parse_new(&args, &d.cfg) {
+                            Ok(x) => {
+                                let mut o = x.opts;
+                                o.agent = crate::agentsdk::ID.into();
+                                o.dir = Some(dir);
+                                quick::begin(&mut d, &target.ssh, o, false);
+                            }
+                            Err(e) => d.flash(e, true),
+                        }
+                    }
                     Ok(Some(crate::browse::Picked::New(dir))) => {
                         let args = ["--host".to_string(), target.ssh.clone()];
                         match crate::cli::parse_new(&args, &d.cfg) {
