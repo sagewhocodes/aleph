@@ -519,7 +519,7 @@ pub(crate) fn run(d: &mut Dash, r: Run) -> Option<Handoff> {
             None
         }
         Run::Palette => {
-            d.mode = Mode::Palette(super::palette::Palette::new(d));
+            super::palette::open(d);
             None
         }
         Run::Themes => {

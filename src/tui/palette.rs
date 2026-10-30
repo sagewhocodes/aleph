@@ -1,5 +1,7 @@
 //! Command palette (ctrl+k / p): sessions on every machine, machines, views,
-//! actions, presets (`@name`) and recent folders, fuzzy-ranked.
+//! actions, presets (`@name`) and recent folders. Each typed word matches on its
+//! own, in any order: "b31 claude" lists Claude Code's sessions on b31. Sessions
+//! say what they are and what they've been doing; ctrl+p pins up to three on top.
 
 use super::fleet::RowId;
 use super::forms::{Field, Res};
@@ -9,7 +11,16 @@ use crate::{fuzzy, history};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// Sessions on top of the palette, at most.
+const MAX_PINS: usize = 3;
+/// What a session gets over anything else in a search: about one letter's worth.
+const SESSION_LEAD: i32 = 20;
+/// Untitled sessions a machine's screens are read for, on one open.
+const TRAIL_READS: usize = 12;
+/// A screen's line is good for this long.
+const TRAIL_FRESH: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug)]
 pub(crate) enum Item {
@@ -81,6 +92,184 @@ pub(crate) struct Palette {
     sel: usize,
     /// its title and what the empty search line says
     words: (&'static str, &'static str),
+}
+
+/// What a pin is saved as: the machine and the session's name, which outlast
+/// its pane.
+fn pin_of(host: &str, s: &crate::herdr::Session) -> String {
+    format!("{host}:{}", s.display())
+}
+
+fn pins(d: &Dash) -> Vec<String> {
+    d.cfg
+        .get_or("palette.pins")
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// ctrl+p on a session: pinned on top of ctrl+k, or not any more. Pins of sessions
+/// that have gone don't count against the three (one may come back), but
+/// make room for new ones.
+pub(crate) fn toggle_pin(d: &mut Dash, p: &mut Palette) {
+    let Some(Item::Session(k)) = p.chosen() else {
+        d.toast(super::Level::Info, "ctrl+p pins sessions");
+        return;
+    };
+    let Some(s) = super::fleet::session(d, &k) else {
+        return;
+    };
+    let pin = pin_of(&s.host, &s);
+    let mut saved = pins(d);
+    if saved.contains(&pin) {
+        saved.retain(|x| *x != pin);
+    } else {
+        let live: Vec<String> = d
+            .fleet
+            .sessions()
+            .iter()
+            .map(|x| pin_of(&x.host, x))
+            .collect();
+        let (mut here, gone): (Vec<String>, Vec<String>) =
+            saved.into_iter().partition(|x| live.contains(x));
+        if here.len() >= MAX_PINS {
+            d.toast(
+                super::Level::Info,
+                format!("{MAX_PINS} are pinned: ctrl+p on one of them unpins it"),
+            );
+            return;
+        }
+        here.push(pin);
+        let room = MAX_PINS.saturating_sub(here.len());
+        here.extend(gone.into_iter().rev().take(room));
+        saved = here;
+    }
+    super::settings::save(d, "palette.pins", &saved.join(","));
+    let (q, sel, words) = (p.q.clone(), p.sel, p.words);
+    let at = p
+        .items
+        .iter()
+        .position(|x| matches!(&x.0, Item::Session(j) if *j == k));
+    *p = Palette::new(d);
+    (p.q, p.words) = (q, words);
+    // the cursor stays on it, wherever it went
+    p.sel = at
+        .and(
+            p.ranked()
+                .iter()
+                .position(|(i, _)| matches!(&p.items[*i].0, Item::Session(j) if *j == k)),
+        )
+        .unwrap_or(sel);
+}
+
+/// ctrl+k: the palette. Sessions with no title say what's on their screen,
+/// read off the UI thread, and they fill in as they answer.
+pub(crate) fn open(d: &mut Dash) {
+    d.mode = Mode::Palette(Palette::new(d));
+    if cfg!(test) {
+        return;
+    }
+    for h in &d.fleet.hosts {
+        let want: Vec<(String, String)> = h
+            .sessions
+            .iter()
+            .filter(|s| s.title.trim().is_empty() && s.title != "-")
+            .map(|s| (s.key(), s.pane_id.clone()))
+            .filter(|(k, _)| {
+                d.trails
+                    .get(k)
+                    .is_none_or(|(at, _)| at.elapsed() > TRAIL_FRESH)
+            })
+            .take(TRAIL_READS)
+            .collect();
+        if want.is_empty() {
+            continue;
+        }
+        let (t, tx) = (d.target_of(&h.alias), d.tx.clone());
+        std::thread::spawn(move || {
+            let x = crate::herdr::Herdr::new(&t);
+            for (key, pane) in want {
+                if let Ok(text) = x.read_pane(&pane, 12) {
+                    let line = super::board::last_line(&text);
+                    if !line.is_empty() {
+                        let line = crate::sentlog::scrub(&line);
+                        let _ = tx.send(super::Bg::Trail { key, line });
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// A screen's line came back: keep it, and show it if the palette's open.
+pub(crate) fn on_trail(d: &mut Dash, key: String, line: String) {
+    d.trails.insert(key.clone(), (Instant::now(), line));
+    if !matches!(d.mode, Mode::Palette(_)) {
+        return;
+    }
+    let sub = super::fleet::session(d, &key).map(|s| session_sub(d, &s));
+    if let (Mode::Palette(p), Some(sub)) = (&mut d.mode, sub) {
+        for it in &mut p.items {
+            if matches!(&it.0, Item::Session(k) if *k == key) {
+                it.2 = sub.clone();
+            }
+        }
+    }
+}
+
+/// A session's line: its agent, machine, state, model, and what it's been
+/// doing (its title, the command it ran, else its screen's last line).
+fn session_sub(d: &Dash, s: &crate::herdr::Session) -> String {
+    let (st, _) = super::fleet::status_for(d, s);
+    let mut parts = vec![
+        if s.agent == crate::agents::SHELL {
+            "Terminal".to_string()
+        } else {
+            crate::agents::label(&s.agent)
+        },
+        s.host.clone(),
+        st,
+    ];
+    let model = super::usage::live_for(d, s)
+        .map(|l| crate::timeline::short_model(&l.model))
+        .unwrap_or_default();
+    if !model.is_empty() {
+        parts.push(model);
+    }
+    let title = s.title.trim();
+    let trail = if !title.is_empty() && title != "-" {
+        title.to_string()
+    } else if let Some(r) = d.fleet.commands_of(&s.key()).first() {
+        r.cmd.clone()
+    } else if let Some((_, l)) = d.trails.get(&s.key()) {
+        l.clone()
+    } else {
+        String::new()
+    };
+    if !trail.is_empty() {
+        parts.push(trail);
+    }
+    parts.join(" · ")
+}
+
+/// Every typed word matches on its own, in any order, and has letters of its
+/// own: longest first, so in "gpu2 gpu" the machine's name doesn't answer for both.
+fn word_match(q: &str, hay: &str) -> Option<(i32, Vec<usize>)> {
+    let mut words: Vec<&str> = q.split_whitespace().collect();
+    words.sort_by_key(|w| std::cmp::Reverse(w.chars().count()));
+    let mut left: Vec<char> = hay.chars().collect();
+    let (mut score, mut pos) = (0, Vec::new());
+    for w in words {
+        let (s, p) = fuzzy::score(w, &left.iter().collect::<String>())?;
+        for &i in &p {
+            left[i] = '\0';
+        }
+        score += s;
+        pos.extend(p);
+    }
+    Some((score, pos))
 }
 
 impl Palette {
@@ -227,17 +416,28 @@ impl Palette {
                 c::ACCENT(),
             ));
         }
+        // pinned sessions on top of everything, in the order they were pinned
+        let pinned = pins(d);
+        let mut on_top: Vec<(usize, (Item, String, String, Color))> = Vec::new();
         for h in &d.fleet.hosts {
             for s in &h.sessions {
-                let (st, col) = super::fleet::status_for(d, s);
-                items.push((
+                let (_, col) = super::fleet::status_for(d, s);
+                let at = pinned.iter().position(|p| *p == pin_of(&h.alias, s));
+                let mark = if at.is_some() { "⚑ " } else { "" };
+                let entry = (
                     Item::Session(s.key()),
-                    format!("{} {}", s.glyph(), s.display()),
-                    format!("{} · {st} · {}", h.alias, s.title),
+                    format!("{mark}{} {}", s.glyph(), s.display()),
+                    session_sub(d, s),
                     col,
-                ));
+                );
+                match at {
+                    Some(i) => on_top.push((i, entry)),
+                    None => items.push(entry),
+                }
             }
         }
+        on_top.sort_by_key(|x| x.0);
+        items.splice(0..0, on_top.into_iter().map(|x| x.1));
         for h in &d.fleet.hosts {
             items.push((
                 Item::Host(h.alias.clone()),
@@ -624,7 +824,13 @@ impl Palette {
             .enumerate()
             .filter_map(|(i, it)| {
                 let hay = format!("{} {}", it.1, it.2);
-                fuzzy::score(q, &hay).map(|(s, pos)| (s, i, pos))
+                // about the same match: the session, ahead of an action naming it
+                let lead = if matches!(it.0, Item::Session(_)) {
+                    SESSION_LEAD
+                } else {
+                    0
+                };
+                word_match(q, &hay).map(|(s, pos)| (s + lead, i, pos))
             })
             .collect();
         if !q.is_empty() {
@@ -654,6 +860,18 @@ impl Palette {
         }
     }
 
+    /// Put the cursor on a session (tests).
+    #[cfg(test)]
+    pub(crate) fn select_session(&mut self, key: &str) {
+        if let Some(i) = self
+            .ranked()
+            .iter()
+            .position(|(i, _)| matches!(&self.items[*i].0, Item::Session(k) if k == key))
+        {
+            self.sel = i;
+        }
+    }
+
     /// Put the cursor on a preset (`:preset name`).
     pub fn choose_preset(&mut self, name: &str) {
         let r = self.ranked();
@@ -671,7 +889,7 @@ impl Palette {
     }
 
     pub fn draw(&self, f: &mut Frame, area: Rect, _t0: Instant) {
-        let w = 80u16.min(area.width.saturating_sub(2));
+        let w = 104u16.min(area.width.saturating_sub(2));
         let h = 18u16.min(area.height.saturating_sub(2));
         let r = Rect {
             x: area.x + (area.width.saturating_sub(w)) / 2,
@@ -694,7 +912,7 @@ impl Palette {
             "─".repeat(inner.width as usize),
             ui::fg(c::LINE()),
         )));
-        let room = inner.height.saturating_sub(2) as usize;
+        let room = inner.height.saturating_sub(3) as usize;
         let ranked = self.ranked();
         let start = self.sel.saturating_sub(room.saturating_sub(1));
         for (n, (i, pos)) in ranked.iter().enumerate().skip(start).take(room) {
@@ -722,10 +940,16 @@ impl Palette {
             let used = 2 + tl;
             let rest = (inner.width as usize).saturating_sub(used + 3);
             if rest > 4 {
-                l.push(Span::styled(
-                    format!("   {}", ui::trunc(sub, rest)),
-                    ui::faint(),
-                ));
+                l.push(Span::styled("   ", ui::faint()));
+                // matched letters show here too: the hay is the title, a space, this
+                for (ci, ch) in ui::trunc(sub, rest).chars().enumerate() {
+                    let st = if pos.contains(&(tl + 1 + ci)) {
+                        ui::fg(c::ACCENT()).add_modifier(Modifier::BOLD)
+                    } else {
+                        ui::faint()
+                    };
+                    l.push(Span::styled(ch.to_string(), st));
+                }
             }
             let mut line = Line::from(l);
             if on {
@@ -737,6 +961,19 @@ impl Palette {
             lines.push(Line::from(Span::styled("  nothing matches", ui::muted())));
         }
         f.render_widget(Paragraph::new(lines), inner);
+        // what the keys do on what's under the cursor
+        let on_session = matches!(self.chosen(), Some(Item::Session(_)));
+        let mut hints = vec![("↑↓", "pick"), ("enter", "go")];
+        if on_session {
+            hints.push(("ctrl+p", "pin"));
+        }
+        hints.push(("esc", "close"));
+        let foot = Rect {
+            y: inner.y + inner.height.saturating_sub(1),
+            height: 1,
+            ..inner
+        };
+        f.render_widget(Paragraph::new(ui::hints_fit(&hints, foot.width)), foot);
     }
 }
 

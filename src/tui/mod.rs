@@ -299,6 +299,11 @@ pub(crate) enum Bg {
         wt: Vec<herdr::Worktree>,
     },
     /// a session Quick start began: (`host:pane`, its name), and open Focus?
+    /// the last line of a session's screen, for the palette
+    Trail {
+        key: String,
+        line: String,
+    },
     /// a start's progress, in herdr's steps (`quick.rs`)
     StartStep {
         id: u64,
@@ -493,6 +498,8 @@ pub struct Dash {
     /// a session to select once a poll has seen it (`aleph focus`, Quick
     /// start): (selector, open it in Focus, since)
     pending_focus: Option<(String, bool, Instant)>,
+    /// the last line of the screens of sessions with no title (the palette)
+    pub(crate) trails: HashMap<String, (Instant, String)>,
     /// sessions on their way: each a row in Fleet (`quick.rs`)
     pub(crate) starting: Vec<quick::Starting>,
     /// starts dropped while running: their panes go when they answer
@@ -583,6 +590,7 @@ impl Dash {
             services,
             hints: MoshiSession::new(in_moshi_session()),
             pending_focus: start.focus.clone().map(|q| (q, true, Instant::now())),
+            trails: HashMap::new(),
             starting: Vec::new(),
             start_gone: Vec::new(),
             upgrade: crate::watch::Upgrade::start(),
@@ -1181,6 +1189,7 @@ impl Dash {
                     }
                 }
             }
+            Bg::Trail { key, line } => palette::on_trail(self, key, line),
             Bg::StartStep { id, label } => quick::on_step(self, id, label),
             Bg::StartDone { id, result } => quick::on_done(self, id, result),
             Bg::Done { ok, msg, refresh } => {
@@ -1458,6 +1467,11 @@ impl Dash {
             }
             Mode::HostForm(hf) => return hosts::form_key(self, hf, k),
             Mode::Palette(mut p) => {
+                if key_str(&k) == "ctrl+p" {
+                    palette::toggle_pin(self, &mut p);
+                    self.mode = Mode::Palette(p);
+                    return None;
+                }
                 return match p.key(k) {
                     forms::Res::Keep => {
                         self.mode = Mode::Palette(p);
@@ -1604,7 +1618,7 @@ impl Dash {
             return None;
         }
         if ks == "ctrl+k" || (ks == "p" && self.view == View::Wall) {
-            self.mode = Mode::Palette(palette::Palette::new(self));
+            palette::open(self);
             return None;
         }
         // what you start with one key (`launch.<key>`, ctrl+t): every view

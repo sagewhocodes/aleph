@@ -145,6 +145,7 @@ fn dash() -> Dash {
         api: None,
         api_seen: None,
         pending_focus: None,
+        trails: Default::default(),
         starting: Vec::new(),
         start_gone: Vec::new(),
         upgrade: crate::watch::Upgrade::start(),
@@ -727,6 +728,96 @@ fn a_failed_start_says_why_retries_and_drops() {
     super::quick::settle(&mut d);
     assert!(matches!(d.starting[0].state, StartState::Failed(_)));
     assert_eq!(d.starting[0].id, id);
+}
+
+/// ctrl+k: a session says its agent, machine and what it's been doing, and each
+/// typed word matches on its own, in any order.
+#[test]
+fn the_palette_finds_a_session_by_machine_and_agent_in_any_order() {
+    let mut d = dash();
+    let _ = render(&mut d, 150, 40);
+    let typed = |d: &mut Dash, q: &str| {
+        d.mode = Mode::Palette(palette::Palette::new(d));
+        for c in q.chars() {
+            d.on_key(k(KeyCode::Char(c)));
+        }
+    };
+    let chosen = |d: &Dash| match &d.mode {
+        Mode::Palette(p) => p.chosen(),
+        _ => None,
+    };
+    for q in ["gpu2 claude", "claude gpu2"] {
+        typed(&mut d, q);
+        let Some(palette::Item::Session(key)) = chosen(&d) else {
+            panic!("{q}: not a session");
+        };
+        assert!(key.starts_with("gpu2|"), "{q}: {key}");
+    }
+    let s = render(&mut d, 150, 40);
+    assert!(s.contains("Claude Code") && s.contains("gpu2"), "{s}");
+    assert!(s.contains("ctrl+p") && s.contains("pin"), "{s}");
+    // a session with no title says what its screen last said, once it's read
+    let bare = {
+        let h = d.fleet.host_mut("b31").unwrap();
+        h.sessions[0].title = String::new();
+        h.sessions[0].key()
+    };
+    typed(&mut d, "ignite");
+    d.on_bg(Bg::Trail {
+        key: bare,
+        line: "12 tests passed".into(),
+    });
+    let s = render(&mut d, 150, 40);
+    assert!(s.contains("12 tests passed"), "{s}");
+}
+
+/// ctrl+p pins a session on top of ctrl+k, three at most, and again unpins it.
+#[test]
+fn the_palette_pins_three_sessions_on_top() {
+    let mut d = dash();
+    let mut keys: Vec<String> = d.fleet.sessions().iter().map(|s| s.key()).collect();
+    let mut more = d.fleet.host("b31").unwrap().sessions[0].clone();
+    more.pane_id = "w1:p77".into();
+    more.name = "fourth".into();
+    more.label = "claude_fourth:x".into();
+    keys.push(more.key());
+    d.fleet.host_mut("b31").unwrap().sessions.push(more);
+    assert!(keys.len() >= 4);
+    let press = |d: &mut Dash, key: &str| {
+        let p = palette::Palette::new(d);
+        d.mode = Mode::Palette(p);
+        let Mode::Palette(p) = &mut d.mode else {
+            unreachable!()
+        };
+        p.select_session(key);
+        d.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        d.mode = Mode::Normal;
+    };
+    let first = |d: &Dash| {
+        let p = palette::Palette::new(d);
+        match p.chosen() {
+            Some(palette::Item::Session(k)) => k,
+            other => panic!("{other:?}"),
+        }
+    };
+    press(&mut d, &keys[2]);
+    assert_eq!(first(&d), keys[2]);
+    press(&mut d, &keys[1]);
+    press(&mut d, &keys[0]);
+    assert_eq!(first(&d), keys[2]);
+    assert_eq!(d.cfg.get_or("palette.pins").split(',').count(), 3);
+    // a fourth is refused, and nothing moves
+    press(&mut d, &keys[3]);
+    assert_eq!(d.cfg.get_or("palette.pins").split(',').count(), 3);
+    // again on one takes it off
+    press(&mut d, &keys[2]);
+    assert_eq!(d.cfg.get_or("palette.pins").split(',').count(), 2);
+    assert_eq!(first(&d), keys[1]);
+    let s = {
+        d.mode = Mode::Palette(palette::Palette::new(&d));
+        render(&mut d, 150, 40)
+    };
+    assert!(s.contains("⚑"), "{s}");
 }
 
 /// One key, and it opens: a terminal in a fixed folder (on the machine you're

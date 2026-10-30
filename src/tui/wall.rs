@@ -2022,7 +2022,7 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
         // ctrl+k: Aleph's palette, typing or not (the agent never gets it;
         // closing the palette goes back to typing)
         if ks == "ctrl+k" {
-            d.mode = Mode::Palette(super::palette::Palette::new(d));
+            super::palette::open(d);
             return None;
         }
         // ctrl+a: the approval board while anything waits on you (else it's

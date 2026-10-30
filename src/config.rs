@@ -193,6 +193,7 @@ pub fn section_of(key: &str) -> &'static str {
         | "close.grace"
         | "shell.list"
         | "shell.ready"
+        | "palette.pins"
         | "wall_fit"
         | "wall_layout"
         | "wall_max"
@@ -449,6 +450,12 @@ pub const KNOWN: &[Known] = &[
         default: "true",
         kind: Kind::Bool,
         help: "while typing into an agent, the first esc is held back with a warning (esc stops most agents' work); a second within 3 s goes to the agent, and so do the ones right after it",
+    },
+    Known {
+        key: "palette.pins",
+        default: "",
+        kind: Kind::Text,
+        help: "the sessions pinned on top of ctrl+k, up to three, as machine:name (ctrl+p there pins and unpins)",
     },
     Known {
         key: "shell.list",

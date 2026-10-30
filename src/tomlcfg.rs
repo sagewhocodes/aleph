@@ -119,6 +119,7 @@ pub const PATHS: &[(&str, &str)] = &[
     ("approvals.group", "automation.approvals_group"),
     ("close.grace", "sessions.close_grace"),
     ("close.exited", "sessions.close_exited"),
+    ("palette.pins", "sessions.palette_pins"),
     ("shell.list", "sessions.shell_list"),
     ("shell.ready", "sessions.shell_ready"),
     ("terminal", "sessions.terminal"),
