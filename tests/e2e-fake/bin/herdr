@@ -65,7 +65,9 @@ updt() { jq "$@" "$T" > "$T.tmp" && mv "$T.tmp" "$T"; }
 # like herdr: `agent …` on a pane with no agent in it is refused
 noagent() { jq -e --arg p "$1" 'any(.result.agents[]; .pane_id==$p or .name==$p)' "$A" >/dev/null || err agent_not_found "agent target $1 not found"; }
 opt() { local k=$1; shift; while (( $# )); do [[ $1 == "$k" ]] && { echo "$2"; return; }; shift; done; }
-n=$(( $(cat "$ST/seq" 2>/dev/null || echo 10) + 1 )); echo $n > "$ST/seq"
+# through a rename: calls run at once, and one reading a half-written file would start
+# the ids over, so that a new pane could get an old one's id and close it with itself
+n=$(cat "$ST/seq" 2>/dev/null); n=$(( ${n:-10} + 1 )); echo $n > "$ST/seq.$$" && mv "$ST/seq.$$" "$ST/seq"
 case "$1 $2" in
   "workspace list") echo '{"id":"cli:workspace:list","result":{"type":"workspace_list","workspaces":[{"workspace_id":"w1","label":"train","number":1,"tab_count":3,"pane_count":4,"focused":true,"agent_status":"working","active_tab_id":"w1:t1"},{"workspace_id":"w2","label":"eval","number":2,"tab_count":1,"pane_count":1,"focused":false,"agent_status":"idle","active_tab_id":"w2:t1"}]}}';;
   "worktree list") echo '{"id":"cli:worktree:list","result":{"type":"worktree_list","source":{"repo_name":"hunt","repo_root":"/srv/hunt","source_workspace_id":"w1"},"worktrees":[{"branch":"main","path":"/srv/hunt","label":"hunt","open_workspace_id":"w1","is_linked_worktree":false,"is_bare":false,"is_detached":false,"is_prunable":false},{"branch":"claude/ignite","path":"/srv/hunt-wt/ignite","label":"hunt:ignite","open_workspace_id":null,"is_linked_worktree":true,"is_bare":false,"is_detached":false,"is_prunable":false}]}}';;

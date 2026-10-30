@@ -68,7 +68,11 @@ fn next() -> u64 {
         .and_then(|t| t.trim().parse::<u64>().ok())
         .unwrap_or(10)
         + 1;
-    let _ = std::fs::write(&p, format!("{n}\n"));
+    // through a rename: the fake CLI reads it at the same time (see bin/herdr)
+    let tmp = st().join(format!("seq.sock{}", std::process::id()));
+    if std::fs::write(&tmp, format!("{n}\n")).is_ok() {
+        let _ = std::fs::rename(&tmp, &p);
+    }
     n
 }
 
