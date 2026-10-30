@@ -1,6 +1,6 @@
 [package]
 name = "aleph"
-version = "2.0.2"
+version = "2.1.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Aleph — one dashboard and CLI for coding agents (Claude Code, Codex, OpenCode, …) running in herdr across your machines: fleet, focus, analytics, presets, notifications and a daemon"

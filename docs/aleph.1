@@ -225,6 +225,13 @@ last close asked, wherever it came from).
 lists them.
 .SS Fleet
 .TP
+.B sdk \fR[\fBstatus\fR | \fBprojects\fR [\fIdir\fR] | \fBdev\fR [\fIdir\fR] | \fBvalidate\fR [\fIdir\fR] | \fBrun\fR [\fIdir\fR] \fB\-m\fR \fItext\fR]
+Cursor's Agent SDK, an agent as a folder of Markdown and TypeScript: each start is a session,
+watched by what runs in its pane.
+.B status
+shows its version, Node and whether you're signed in, per machine.
+Signing in stays yours (\fBagent\-sdk login\fR).
+.TP
 .B wall \fR[\fIname\fR | \fIhost\fB:\fIname\fR]... \fI(planned)\fR
 Live tiles of sessions from every machine, through herdr terminal streams.
 The named sessions are shown, or the marked ones, or all of them with the

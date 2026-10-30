@@ -10,6 +10,25 @@
 # only a build with that feature carries them.
 
 [[entry]]
+id = "2.1.0"
+date = "2026-10-31"
+title = "Twelve hours of graphs, a timeline your way, Cursor's Agent SDK"
+notes = [
+  "Every machine keeps twelve hours of resource graphs, even with nothing open. + and - in Monitor change the timescale, 30 minutes by default, and a graph no longer redraws: a point appears when its time is up. Settings > Machines sets how much for each machine.",
+  "Monitor's Timeline: M for this machine only, C hides the conversation, O organises it by machine, project, agent or account, F narrows it to any of those.",
+  "aleph sdk runs Cursor's Agent SDK projects as sessions, on any machine, watched on Fleet like the rest. Signing in stays yours.",
+  "Picking Raycast in aleph setup now installs it, with nothing to copy, and asks Raycast for the menu bar.",
+  "ctrl or cmd + click opens a web link in any pane, on this computer. Idle sessions' screens are read less often, and polls use the connection already open.",
+]
+commits = [
+  "Twelve hours of resource history, with timescales",
+  "Monitor's Timeline: this machine, no panel, grouped and filtered",
+  "Cursor's Agent SDK: run and watch",
+  "Raycast installs itself from setup, then asks for its menu bar",
+  "The rest of herdr's API: polls over the forward, links, protocol",
+]
+
+[[entry]]
 id = "2.1.0-prices"
 date = "2026-10-31"
 title = "Prices that stay current, and a fix for two windows"

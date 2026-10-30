@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.1.0 — in progress
+## 2.1.0 — 2026-10-31
 
 ### herdr
 - **Polls use the connection that's already open.** Where Aleph already listens to a machine's events, its session list comes
