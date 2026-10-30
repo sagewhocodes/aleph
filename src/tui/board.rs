@@ -10,6 +10,7 @@
 //! j/k move, ←→ fold a machine, `,` changes the order.
 
 use super::fleet::{self, RowId};
+use super::monitor_draw::clean;
 use super::{Dash, View};
 use crate::fleet::{Conn, Host};
 use crate::herdr::{Herdr, Session};
@@ -377,6 +378,7 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
     let mut map: Vec<Option<usize>> = Vec::new();
     let mut words_at: Vec<usize> = Vec::new();
     let mut keys: Vec<(usize, String)> = Vec::new();
+    let mut bands: Vec<(usize, Option<usize>, String, bool)> = Vec::new();
     for (j, row) in rows.iter().enumerate() {
         let on = sel.as_ref() == Some(row);
         let idx = all.iter().position(|r| r == row);
@@ -399,6 +401,9 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
                     map.push(None);
                 }
                 add(band(d, h, w, on), &mut lines, &mut map);
+                if !folded(d, h) {
+                    bands.push((lines.len(), idx, a.clone(), on));
+                }
             }
             RowId::Sess(k) => {
                 let Some(s) = d.fleet.sessions().into_iter().find(|s| s.key() == *k) else {
@@ -456,8 +461,23 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
             RowId::Avail(a) => add(vec![fleet::avail_line(d, a, w, on)], &mut lines, &mut map),
         }
     }
-    // keep the selected row in view
     let h = inner.height as usize;
+    // what's left of the screen goes to what the machines can say
+    for (at, idx, more) in room_for_more(d, &bands, w, h.saturating_sub(lines.len()))
+        .into_iter()
+        .rev()
+    {
+        let n = more.len();
+        for x in words_at.iter_mut().filter(|x| **x >= at) {
+            *x += n;
+        }
+        for (x, _) in keys.iter_mut().filter(|(x, _)| *x >= at) {
+            *x += n;
+        }
+        map.splice(at..at, std::iter::repeat_n(idx, n));
+        lines.splice(at..at, more);
+    }
+    // keep the selected row in view
     let first = map
         .iter()
         .position(|x| {
@@ -498,13 +518,16 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
     d.fv.linemap = map;
 }
 
-/// A machine's band: who it is and its meters, then a line of what else.
+/// A machine folded away: its band alone, as small as it goes.
+fn folded(d: &Dash, h: &Host) -> bool {
+    h.collapsed && d.fv.filter.is_empty()
+}
+
+/// A machine's band: who it is and its meters, a line per GPU with its whole
+/// model, then a line of what else. Folded, the GPUs join the meters.
 fn band(d: &Dash, h: &Host, w: usize, on: bool) -> Vec<Line<'static>> {
-    let fold = if h.collapsed && d.fv.filter.is_empty() {
-        "▸ "
-    } else {
-        "▾ "
-    };
+    let small = folded(d, h);
+    let fold = if small { "▸ " } else { "▾ " };
     let (st, col) = fleet::host_state(h, d.t0);
     let os = fleet::host_os(d, h);
     let mut l: Vec<Span<'static>> = vec![Span::styled(fold, ui::faint())];
@@ -539,10 +562,21 @@ fn band(d: &Dash, h: &Host, w: usize, on: bool) -> Vec<Line<'static>> {
         .stats(&h.alias)
         .filter(|s| s.live() || !s.cpu_hist.is_empty());
     let mut more: Vec<Span<'static>> = vec![Span::raw("    ")];
+    let mut gpus: Vec<Line<'static>> = Vec::new();
     match &stats {
         Some(st) => {
-            l.extend(meters(st, room));
+            l.extend(meters(st, room, small));
             more.extend(details(d, &h.alias, st));
+            if !small {
+                gpus = st
+                    .gpus
+                    .iter()
+                    .map(|g| gpu_line(g, st.gpus.len() > 1, w, on))
+                    .collect();
+                if let Some(why) = gpu_trouble(st) {
+                    gpus.push(paint1(fit(detail_line("gpu", vec![warned(why)]), w), on, w));
+                }
+            }
         }
         None => {
             let why = match &h.conn {
@@ -563,15 +597,426 @@ fn band(d: &Dash, h: &Host, w: usize, on: bool) -> Vec<Line<'static>> {
         ));
     }
     let mut v = vec![paint1(l, on, w)];
+    v.extend(gpus);
     if more.len() > 1 {
         v.push(paint1(fit(more, w), on, w));
     }
     v
 }
 
-/// CPU, memory and each GPU in `room` columns: bar, figure, sparkline; the
-/// sparklines go first when it's tight, then the bars shrink.
-fn meters(st: &crate::telemetry::Stats, room: usize) -> Vec<Span<'static>> {
+/// A column for a whole GPU model, the same on every machine: a card's name
+/// and number run to about 28.
+fn model_col(w: usize) -> usize {
+    (w * 2 / 7).clamp(14, 32)
+}
+
+/// One GPU: its badge and whole model, how busy, then what fits, the most
+/// telling first. On a machine with several, its number as well.
+fn gpu_line(g: &crate::telemetry::Gpu, many: bool, w: usize, on: bool) -> Line<'static> {
+    let frac = g.util.clamp(0.0, 1.0);
+    let badge = crate::icons::gpu(&g.vendor);
+    let bw = ui::width(&badge.content);
+    let mut model = clean(&g.name.replace("NVIDIA ", ""));
+    if many && !g.index.trim().is_empty() {
+        model = format!("{} {model}", clean(g.index.trim()));
+    }
+    let mc = model_col(w);
+    let mut l = vec![
+        Span::raw("    "),
+        badge,
+        Span::raw(" ".repeat(10usize.saturating_sub(bw).max(1))),
+        Span::styled(ui::pad(&ui::trunc(&model, mc), mc + 1), ui::bold()),
+    ];
+    l.extend(ui::bar(frac, if w >= 150 { 14 } else { 8 }, ui::heat(frac)));
+    l.push(Span::styled(
+        format!(" {:>3.0}%", frac * 100.0),
+        Style::new().fg(ui::heat(frac)),
+    ));
+    if w >= 110 && !g.hist.is_empty() {
+        l.push(Span::raw(" "));
+        l.push(spark(&g.hist, if w >= 150 { 16 } else { 8 }, c::ACCENT()));
+    }
+    let mut parts: Vec<Span<'static>> = Vec::new();
+    if g.mem_total > 0.0 && g.renderer.is_none() {
+        let fr = g.mem_used / g.mem_total;
+        parts.push(Span::styled(
+            format!("{}/{}", ui::bytes(g.mem_used), ui::bytes(g.mem_total)),
+            Style::new().fg(ui::heat(fr)),
+        ));
+    }
+    if let Some(t) = g.temp.filter(|t| t.is_finite()) {
+        parts.push(Span::styled(
+            format!("{t:.0}°"),
+            Style::new().fg(ui::heat(t / 100.0)),
+        ));
+    }
+    if let Some(p) = g.power.filter(|p| p.is_finite()) {
+        parts.push(Span::styled(
+            match g.power_limit.filter(|x| x.is_finite() && *x > 0.0) {
+                Some(lim) => format!("{p:.0}/{lim:.0} W"),
+                None => format!("{p:.0} W"),
+            },
+            ui::muted(),
+        ));
+    }
+    if let Some(fan) = g.fan.filter(|x| x.is_finite()) {
+        parts.push(Span::styled(format!("fan {fan:.0}%"), ui::faint()));
+    }
+    for t in g.throttle.iter().take(2) {
+        parts.push(warned(t));
+    }
+    if let Some(e) = g.ecc.filter(|e| *e > 0) {
+        parts.push(warned(&format!("{e} ECC errors")));
+    }
+    let mut used: usize = l.iter().map(|s| ui::width(&s.content)).sum();
+    for p in parts {
+        let pw = ui::width(&p.content) + 2;
+        if used + pw > w {
+            break;
+        }
+        used += pw;
+        l.push(Span::raw("  "));
+        l.push(p);
+    }
+    paint1(l, on, w)
+}
+
+/// Something wrong with a GPU, in the colour that says so.
+fn warned(text: &str) -> Span<'static> {
+    Span::styled(
+        clean(text),
+        ui::fg(c::YELLOW()).add_modifier(Modifier::BOLD),
+    )
+}
+
+/// Why the GPUs are missing, when that's news: a tool that failed is, a
+/// machine with no GPU tool at all isn't (`gpu_group`, when there's room).
+fn gpu_trouble(st: &crate::telemetry::Stats) -> Option<&str> {
+    let note = st.gpu_note.as_deref()?.trim();
+    (st.gpus.is_empty() && !note.is_empty() && note != crate::telemetry::NO_GPU_TOOL)
+        .then_some(note)
+}
+
+/// A detail line: a label in its own column, then what it says.
+fn detail_line(label: &str, mut spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    let mut v = vec![
+        Span::raw("    "),
+        Span::styled(ui::pad(label, 9), ui::fg(c::MUTED())),
+    ];
+    v.append(&mut spans);
+    v
+}
+
+/// `a · b · c`.
+fn dotted(parts: Vec<Vec<Span<'static>>>) -> Vec<Span<'static>> {
+    let mut v = Vec::new();
+    for (i, p) in parts.into_iter().filter(|p| !p.is_empty()).enumerate() {
+        if i > 0 {
+            v.push(Span::styled(" · ", ui::faint()));
+        }
+        v.extend(p);
+    }
+    v
+}
+
+fn muted(text: String) -> Vec<Span<'static>> {
+    vec![Span::styled(text, ui::muted())]
+}
+
+/// Each GPU's clocks, link and encoders, and who is using it. No GPU: why.
+fn gpu_group(st: &crate::telemetry::Stats) -> Vec<Vec<Span<'static>>> {
+    let ok = |x: Option<f64>| x.filter(|v| v.is_finite());
+    let many = st.gpus.len() > 1;
+    let mut out = Vec::new();
+    for g in &st.gpus {
+        let mut parts = Vec::new();
+        match (ok(g.clock_sm), ok(g.clock_sm_max)) {
+            (Some(c), Some(m)) if m > 0.0 => parts.push(muted(format!("{c:.0}/{m:.0} MHz"))),
+            (Some(c), _) => parts.push(muted(format!("{c:.0} MHz"))),
+            _ => {}
+        }
+        if let Some(c) = ok(g.clock_mem) {
+            parts.push(muted(format!("memory {c:.0} MHz")));
+        }
+        if !g.pstate.trim().is_empty() {
+            parts.push(muted(clean(g.pstate.trim())));
+        }
+        if !g.pcie.trim().is_empty() {
+            parts.push(muted(format!("PCIe {}", clean(g.pcie.trim()))));
+        }
+        if let Some(m) = ok(g.mem_util) {
+            parts.push(muted(format!("memory bus {:.0}%", m * 100.0)));
+        }
+        if let Some(m) = ok(g.temp_mem) {
+            parts.push(muted(format!("memory {m:.0}°")));
+        }
+        for (name, v) in [("enc", ok(g.enc)), ("dec", ok(g.dec))] {
+            if let Some(v) = v.filter(|v| *v > 0.0) {
+                parts.push(muted(format!("{name} {:.0}%", v * 100.0)));
+            }
+        }
+        for (name, v) in [("renderer", ok(g.renderer)), ("tiler", ok(g.tiler))] {
+            if let Some(v) = v {
+                parts.push(muted(format!("{name} {:.0}%", v * 100.0)));
+            }
+        }
+        if let Some(a) = ok(g.mem_alloc).filter(|a| *a > 0.0) {
+            parts.push(muted(format!("{} allocated", ui::bytes(a))));
+        }
+        let mut users: Vec<&crate::telemetry::GpuProc> = st
+            .gpu_procs
+            .iter()
+            .filter(|p| p.gpu == g.index || (p.gpu == g.bus && !g.bus.is_empty()))
+            .collect();
+        users.sort_by(|a, b| b.mem.total_cmp(&a.mem));
+        for p in users.iter().take(2) {
+            let who = if p.owner.is_empty() {
+                &p.user
+            } else {
+                &p.owner
+            };
+            let name = if p.cmd.is_empty() { &p.name } else { &p.cmd };
+            let name = name.rsplit('/').next().unwrap_or(name);
+            parts.push(muted(format!(
+                "{} {} {}",
+                ui::trunc(&clean(name), 20),
+                ui::bytes(p.mem),
+                clean(who)
+            )));
+        }
+        if users.len() > 2 {
+            parts.push(muted(format!("+{} more", users.len() - 2)));
+        }
+        let parts = dotted(parts);
+        if !parts.is_empty() {
+            let label = if many {
+                format!("gpu {}", clean(g.index.trim()))
+            } else {
+                "gpu".to_string()
+            };
+            out.push(detail_line(&label, parts));
+        }
+    }
+    if st.gpus.is_empty() && gpu_trouble(st).is_none() {
+        if let Some(n) = st.gpu_note.as_deref().filter(|n| !n.trim().is_empty()) {
+            out.push(detail_line(
+                "gpu",
+                vec![Span::styled(clean(n.trim()), ui::faint())],
+            ));
+        }
+    }
+    out
+}
+
+/// The computer itself: its CPU, how loaded, how long up, what it runs.
+fn machine_group(st: &crate::telemetry::Stats) -> Vec<Vec<Span<'static>>> {
+    let mut parts = Vec::new();
+    if !st.cpu_model.trim().is_empty() {
+        parts.push(vec![Span::styled(
+            clean(st.cpu_model.trim()),
+            Style::new().fg(c::TEXT()),
+        )]);
+    }
+    if st.ncpu > 0 {
+        parts.push(muted(format!("{} threads", st.ncpu)));
+    }
+    if st.sockets > 1 {
+        parts.push(muted(format!("{} sockets", st.sockets)));
+    }
+    if let Some(m) = st.cpu_mhz.filter(|m| m.is_finite() && *m > 0.0) {
+        parts.push(muted(format!("{:.1} GHz", m / 1000.0)));
+    }
+    if let Some(t) = st.cpu_temp.filter(|t| t.is_finite()) {
+        parts.push(vec![Span::styled(
+            format!("{t:.0}°"),
+            Style::new().fg(ui::heat(t / 100.0)),
+        )]);
+    }
+    if st.load != [0.0; 3] {
+        parts.push(muted(format!(
+            "load {:.1} {:.1} {:.1}",
+            st.load[0], st.load[1], st.load[2]
+        )));
+    }
+    if st.swap_total > 0.0 {
+        parts.push(muted(format!(
+            "swap {}/{}",
+            ui::bytes(st.swap_used),
+            ui::bytes(st.swap_total)
+        )));
+    }
+    if st.uptime > 0 {
+        parts.push(muted(format!("up {}", ui::dur(st.uptime))));
+    }
+    if st.procs_total > 0 {
+        parts.push(muted(format!("{} processes", st.procs_total)));
+    }
+    if let Some(n) = st.users_logged.filter(|n| *n > 0) {
+        parts.push(muted(format!("{n} user{}", if n == 1 { "" } else { "s" })));
+    }
+    if !st.kernel.trim().is_empty() {
+        parts.push(muted(clean(st.kernel.trim())));
+    }
+    let parts = dotted(parts);
+    if parts.is_empty() {
+        return Vec::new();
+    }
+    vec![detail_line("machine", parts)]
+}
+
+/// Each interface's traffic; then how full the disks are and how busy.
+fn net_disk_group(st: &crate::telemetry::Stats) -> Vec<Vec<Span<'static>>> {
+    let mut out = Vec::new();
+    let mut nets: Vec<&crate::telemetry::Net> = st.nets.iter().collect();
+    nets.sort_by(|a, b| (b.rx + b.tx).total_cmp(&(a.rx + a.tx)));
+    // the ones doing nothing say nothing, unless they're all there is
+    if nets.iter().any(|n| n.rx + n.tx > 0.0) {
+        nets.retain(|n| n.rx + n.tx > 0.0);
+    }
+    let nets: Vec<Vec<Span<'static>>> = nets
+        .into_iter()
+        .take(5)
+        .map(|n| {
+            muted(format!(
+                "{} ↓{}/s ↑{}/s",
+                clean(&n.name),
+                ui::bytes(n.rx),
+                ui::bytes(n.tx)
+            ))
+        })
+        .collect();
+    if !nets.is_empty() {
+        out.push(detail_line("network", dotted(nets)));
+    }
+    let mut parts: Vec<Vec<Span<'static>>> = st
+        .disks
+        .iter()
+        .filter(|(_, t, _)| *t > 0.0)
+        .take(4)
+        .map(|(m, t, u)| {
+            let fr = u / t;
+            vec![
+                Span::styled(format!("{} ", clean(m)), ui::muted()),
+                Span::styled(format!("{:.0}%", fr * 100.0), Style::new().fg(ui::heat(fr))),
+                Span::styled(format!(" of {}", ui::bytes(*t)), ui::faint()),
+            ]
+        })
+        .collect();
+    let mut io: Vec<&crate::telemetry::DiskIo> = st.disk_io.iter().collect();
+    io.sort_by(|a, b| (b.read + b.write).total_cmp(&(a.read + a.write)));
+    for x in io.into_iter().take(3) {
+        let busy = x
+            .busy
+            .filter(|b| b.is_finite())
+            .map_or(String::new(), |b| format!(" {:.0}% busy", b * 100.0));
+        parts.push(muted(format!(
+            "{} read {}/s write {}/s{busy}",
+            clean(&x.name),
+            ui::bytes(x.read),
+            ui::bytes(x.write)
+        )));
+    }
+    let parts = dotted(parts);
+    if !parts.is_empty() {
+        out.push(detail_line("disks", parts));
+    }
+    out
+}
+
+/// The agents running here, the sessions they've had today, its local servers.
+fn agents_group(d: &Dash, alias: &str, st: &crate::telemetry::Stats) -> Vec<Vec<Span<'static>>> {
+    let mut parts: Vec<Vec<Span<'static>>> = st
+        .agent_procs
+        .iter()
+        .map(|(id, n, rss)| {
+            vec![
+                crate::icons::agent(id),
+                Span::styled(
+                    format!(" {} {n} · {}", clean(id), ui::bytes(*rss)),
+                    ui::muted(),
+                ),
+            ]
+        })
+        .collect();
+    if !st.sessions_today.is_empty() {
+        let today: Vec<String> = st
+            .sessions_today
+            .iter()
+            .map(|(id, n)| format!("{} {n}", clean(id)))
+            .collect();
+        parts.push(muted(format!("today {}", today.join(" "))));
+    }
+    if let Some((_, w)) = d.services.iter().find(|(a, _)| a == alias) {
+        let found = w.snapshot().found;
+        if !found.is_empty() {
+            parts.push(crate::services::summary(&found));
+        }
+    }
+    let parts = dotted(parts);
+    if parts.is_empty() {
+        return Vec::new();
+    }
+    vec![detail_line("agents", parts)]
+}
+
+/// What the screen's `spare` lines can hold: a group at a time, the same one
+/// for every machine, the group that doesn't fit left out and the next one
+/// tried. Lines to add after each band, in the bands' order.
+fn room_for_more(
+    d: &Dash,
+    bands: &[(usize, Option<usize>, String, bool)],
+    w: usize,
+    spare: usize,
+) -> Vec<(usize, Option<usize>, Vec<Line<'static>>)> {
+    if spare == 0 || bands.is_empty() {
+        return Vec::new();
+    }
+    let stats: Vec<_> = bands
+        .iter()
+        .map(|b| d.stats(&b.2).filter(|s| s.live() || !s.cpu_hist.is_empty()))
+        .collect();
+    let mut left = spare;
+    let mut out: Vec<Vec<Vec<Span<'static>>>> = vec![Vec::new(); bands.len()];
+    for group in 0..4 {
+        let got: Vec<Vec<Vec<Span<'static>>>> = bands
+            .iter()
+            .zip(&stats)
+            .map(|(b, st)| match st {
+                None => Vec::new(),
+                Some(st) => match group {
+                    0 => gpu_group(st),
+                    1 => machine_group(st),
+                    2 => net_disk_group(st),
+                    _ => agents_group(d, &b.2, st),
+                },
+            })
+            .collect();
+        let need: usize = got.iter().map(Vec::len).sum();
+        if need > left {
+            continue;
+        }
+        left -= need;
+        for (o, g) in out.iter_mut().zip(got) {
+            o.extend(g);
+        }
+    }
+    bands
+        .iter()
+        .zip(out)
+        .filter(|(_, more)| !more.is_empty())
+        .map(|(b, more)| {
+            let lines = more
+                .into_iter()
+                .map(|l| paint1(fit(l, w), b.3, w))
+                .collect();
+            (b.0, b.1, lines)
+        })
+        .collect()
+}
+
+/// CPU, memory and (with `gpus`) each GPU in `room` columns: bar, figure,
+/// sparkline; the sparklines go first when it's tight, then the bars shrink.
+fn meters(st: &crate::telemetry::Stats, room: usize, gpus: bool) -> Vec<Span<'static>> {
     let mut items: Vec<(String, f64, String, Vec<f64>, Color)> = vec![
         (
             "cpu".into(),
@@ -588,7 +1033,7 @@ fn meters(st: &crate::telemetry::Stats, room: usize) -> Vec<Span<'static>> {
             c::GREEN(),
         ),
     ];
-    for g in &st.gpus {
+    for g in st.gpus.iter().filter(|_| gpus) {
         let name = g
             .name
             .replace("NVIDIA ", "")

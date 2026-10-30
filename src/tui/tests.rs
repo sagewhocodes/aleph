@@ -4296,6 +4296,130 @@ fn fleet_maximised_is_a_board_of_machines_and_sessions() {
     assert!(!d.fb.on);
 }
 
+/// A machine with two different GPUs and something to say in every group.
+fn gpu_box() -> crate::telemetry::Stats {
+    let gpu = |i: &str, name: &str| crate::telemetry::Gpu {
+        index: i.into(),
+        name: name.into(),
+        vendor: "nvidia".into(),
+        util: 0.73,
+        mem_used: 12e9,
+        mem_total: 24e9,
+        temp: Some(64.0),
+        power: Some(301.0),
+        power_limit: Some(450.0),
+        clock_sm: Some(2520.0),
+        clock_sm_max: Some(3105.0),
+        pstate: "P0".into(),
+        pcie: "gen4 x16".into(),
+        ..Default::default()
+    };
+    crate::telemetry::Stats {
+        updated: Some(std::time::Instant::now()),
+        cpu_model: "EPYC 7763".into(),
+        ncpu: 128,
+        uptime: 90000,
+        load: [3.1, 2.2, 1.9],
+        gpus: vec![
+            gpu("0", "NVIDIA RTX 5000 Ada Generation"),
+            gpu("1", "NVIDIA GeForce RTX 4090"),
+        ],
+        nets: vec![crate::telemetry::Net {
+            name: "eth0".into(),
+            rx: 1e6,
+            tx: 2e4,
+            ..Default::default()
+        }],
+        disks: vec![("/data".into(), 4e12, 3.6e12)],
+        agent_procs: vec![("claude".into(), 3, 1.2e9)],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_board_names_every_gpu_and_fills_a_tall_screen() {
+    let mut d = dash_own();
+    let _ = d.cfg.set("layout.fleet", "max top");
+    d.tele.insert(
+        "b31".into(),
+        crate::telemetry::Telemetry::fixed("b31", gpu_box()),
+    );
+    // a tall screen: every model whole, and all four groups
+    let s = render(&mut d, 200, 60);
+    assert!(d.fb.on, "{s}");
+    assert!(s.contains("RTX 5000 Ada Generation"), "{s}");
+    assert!(s.contains("GeForce RTX 4090"), "{s}");
+    assert!(s.contains("2520/3105 MHz"), "the GPU group: {s}");
+    assert!(s.contains("EPYC 7763"), "the machine group: {s}");
+    assert!(s.contains("eth0"), "the network group: {s}");
+    assert!(s.contains("/data"), "the disks: {s}");
+    assert!(s.contains("claude 3"), "the agents group: {s}");
+    // their lines don't push a session off the list or lose its row
+    assert!(s.contains("claude_temper"), "{s}");
+    d.fv.sel = Some(fleet::RowId::Host("b31".into()));
+    d.on_key(k(KeyCode::Char('j')));
+    assert_eq!(d.fv.sel, Some(fleet::RowId::Sess("b31|w1:p2".into())));
+    // a machine full of GPUs on the smallest board: the group that doesn't
+    // fit (one line for each) is left out, and the next one is tried
+    let many = |n: usize| {
+        let mut st = gpu_box();
+        st.gpus = (0..n)
+            .map(|i| crate::telemetry::Gpu {
+                index: i.to_string(),
+                ..st.gpus[0].clone()
+            })
+            .collect();
+        crate::telemetry::Telemetry::fixed("b31", st)
+    };
+    d.tele.insert("b31".into(), many(8));
+    let s = render(&mut d, 104, 28);
+    assert!(d.fb.on, "{s}");
+    assert!(
+        s.contains("7 RTX 5000 Ada Generation"),
+        "every GPU, whole: {s}"
+    );
+    assert!(!s.contains("2520/3105 MHz"), "{s}");
+    assert!(s.contains("EPYC 7763") && s.contains("eth0"), "{s}");
+    // no room at all: the GPUs stay, the groups go, the sessions are all there
+    d.tele.insert("b31".into(), many(13));
+    let s = render(&mut d, 104, 28);
+    assert!(s.contains("12 RTX 5000 Ada Generation"), "{s}");
+    assert!(!s.contains("EPYC 7763"), "{s}");
+    assert!(s.contains("claude_weave"), "{s}");
+    // folded: small again, the GPUs back among the meters
+    d.fv.sel = Some(fleet::RowId::Host("b31".into()));
+    d.fleet.hosts.iter_mut().for_each(|h| h.collapsed = true);
+    let s = render(&mut d, 200, 60);
+    assert!(!s.contains("2520/3105 MHz"), "{s}");
+    assert!(!s.contains("EPYC 7763"), "{s}");
+    assert!(s.contains("RTX 5000"), "{s}");
+}
+
+#[test]
+fn the_board_says_why_a_machine_shows_no_gpu() {
+    let mut d = dash_own();
+    let _ = d.cfg.set("layout.fleet", "max top");
+    let st = |note: &str| crate::telemetry::Stats {
+        updated: Some(std::time::Instant::now()),
+        gpu_note: Some(note.into()),
+        ..Default::default()
+    };
+    d.tele.insert(
+        "b31".into(),
+        crate::telemetry::Telemetry::fixed("b31", st("nvidia-smi failed")),
+    );
+    // a tool that failed is news, however little room there is
+    let s = render(&mut d, 104, 28);
+    assert!(s.contains("nvidia-smi failed"), "{s}");
+    // a machine with no GPU tool isn't: only when there's room to spare
+    d.tele.insert(
+        "b31".into(),
+        crate::telemetry::Telemetry::fixed("b31", st(crate::telemetry::NO_GPU_TOOL)),
+    );
+    let s = render(&mut d, 200, 60);
+    assert!(s.contains("no nvidia-smi or rocm-smi"), "{s}");
+}
+
 #[test]
 fn the_board_marks_several_and_can_group_the_same_question() {
     let mut d = dash_own();

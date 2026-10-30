@@ -354,7 +354,7 @@ fn period(st: &Stats) -> f64 {
 }
 
 /// Control characters out (a process name can contain anything).
-fn clean(s: &str) -> String {
+pub(super) fn clean(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect()

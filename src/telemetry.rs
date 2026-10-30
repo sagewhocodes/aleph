@@ -633,6 +633,9 @@ impl Stats {
 
 // ------------------------------------------------------------------ parsing
 
+/// `gpu_note` when a machine simply has no GPU tool: not a failure.
+pub const NO_GPU_TOOL: &str = "no nvidia-smi or rocm-smi on this machine";
+
 /// A process as one sample reports it (`Q` on Linux, `T` on macOS).
 struct RawProc {
     pid: String,
@@ -1579,7 +1582,7 @@ impl Acc {
                     "none" if st.platform == "macos" => {
                         "this Mac's GPU didn't report its statistics (ioreg)".into()
                     }
-                    "none" => "no nvidia-smi or rocm-smi on this machine".into(),
+                    "none" => NO_GPU_TOOL.into(),
                     "amd" if msg.is_empty() => "rocm-smi failed".into(),
                     _ if msg.is_empty() => "nvidia-smi failed".into(),
                     _ => msg.to_string(),
