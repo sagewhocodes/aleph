@@ -14,6 +14,7 @@
 //!   key.<action>=<key>    dashboard key overrides
 //!   action.<key>=<label>|<command>   custom keys: run <command> in a new tab in the session's folder
 //!   launch.<key>=<what>   keys that start something and open it: terminal, terminal [machine:]/folder, or a preset
+//!   prompt.<name>         a saved prompt; prompt_tags.<name> its scenarios, prompt_agents.<name> the agents it's for
 //!   hook.pre_new / hook.post_new     commands run before the agent starts (remote) / after (local)
 //!
 //! Resolution order for the target host: `--host` flag > CC_SSH_HOST > CC_MACHINE

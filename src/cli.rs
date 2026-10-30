@@ -1183,6 +1183,7 @@ pub fn new(a: Args) -> ExitCode {
                 .map(|b| String::from_utf8_lossy(b).into_owned())
                 .unwrap_or_default(),
             agent: na.opts.agent.clone(),
+            kind: na.opts.agent.clone(),
             ..Default::default()
         };
         match crate::prompts::expand(&a.cfg, &p, &ctx, &vars) {

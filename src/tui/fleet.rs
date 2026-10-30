@@ -639,6 +639,7 @@ pub(crate) fn run_act(d: &mut Dash, act: Act) -> Option<Handoff> {
             }
         }
         Act::Filter => d.fv.filtering = true,
+        Act::Prompts => super::promptlib::open(d),
         Act::Refresh => {
             // a start that failed: another go
             if let Some(RowId::Starting(id)) = &sel {

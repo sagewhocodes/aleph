@@ -560,7 +560,7 @@ fn quick_start_enter_takes_the_place_then_starts_the_agent() {
 /// `i` and the palette say which agent starts, and it's the machine's own.
 #[test]
 fn i_names_the_agent_it_starts() {
-    let mut d = dash();
+    let mut d = dash_own();
     let _ = d.cfg.set("host.b31.agent", "codex");
     d.fv.sel = Some(fleet::RowId::Host("b31".into()));
     let h = fleet::hints(&d);
@@ -775,7 +775,7 @@ fn the_palette_finds_a_session_by_machine_and_agent_in_any_order() {
 /// you're in one, your windows by name.
 #[test]
 fn every_command_is_in_the_palette() {
-    let mut d = dash();
+    let mut d = dash_own();
     let _ = render(&mut d, 150, 40);
     let search = |d: &Dash, q: &str| {
         let mut p = palette::Palette::new(d);
@@ -827,7 +827,7 @@ fn every_command_is_in_the_palette() {
 /// for an empty pane still fills that pane.
 #[test]
 fn in_focus_the_palette_goes_to_a_session_and_ctrl_s_adds_it() {
-    let mut d = dash();
+    let mut d = dash_own();
     let _ = render(&mut d, 150, 40);
     let panes = |d: &Dash| d.wall.win().map_or(0, |w| w.root.leaves().len());
     wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
@@ -860,10 +860,138 @@ fn in_focus_the_palette_goes_to_a_session_and_ctrl_s_adds_it() {
     assert_eq!(wall::focused_session(&d).map(|s| s.key()), Some(first));
 }
 
+/// The prompt library: browse by scenario and agent, read one whole, use it,
+/// edit it, add one, delete it.
+#[test]
+fn the_prompt_library_browses_uses_and_edits() {
+    let mut d = dash_own();
+    let _ = render(&mut d, 150, 40);
+    let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    let kind = d.fleet.host("b31").unwrap().sessions[0].agent.clone();
+    assert_eq!(kind, "claude");
+    let first = d.fleet.host("b31").unwrap().sessions[0].key();
+    fleet::select(&mut d, fleet::RowId::Sess(first));
+    d.on_key(ctrl('p'));
+    assert!(matches!(d.mode, Mode::Prompts(_)));
+    let s = render(&mut d, 150, 40);
+    assert!(s.contains("Prompts") && s.contains("security"), "{s}");
+    // the agent's own way of doing it stands in for the general one
+    assert!(
+        s.contains("@review-claude") && !s.contains("@review-codex"),
+        "{s}"
+    );
+    // letters search; the prompt shows whole, what it asks for said
+    for c in "plan".chars() {
+        d.on_key(k(KeyCode::Char(c)));
+    }
+    let s = render(&mut d, 150, 40);
+    assert!(
+        s.contains("@plan-claude") && s.contains("for Claude Code"),
+        "{s}"
+    );
+    assert!(s.contains("{goal}") && s.contains("asks for"), "{s}");
+    // ctrl+a: every agent's
+    d.on_key(ctrl('a'));
+    assert!(render(&mut d, 150, 40).contains("@plan "), "every agent's");
+    d.on_key(ctrl('a'));
+    // enter: filled in for this session, its variable asked first
+    d.on_key(k(KeyCode::Enter));
+    for c in "ship it".chars() {
+        d.on_key(k(KeyCode::Char(c)));
+    }
+    d.on_key(k(KeyCode::Enter));
+    let Mode::Input(i) = &d.mode else {
+        panic!("not a text box")
+    };
+    assert!(i.f.text.contains("how to ship it"), "{}", i.f.text);
+    assert!(matches!(i.purpose, forms::For::Send(_)));
+    d.mode = Mode::Normal;
+    // a new one, with a scenario and an agent; esc comes back to the library
+    d.on_key(ctrl('p'));
+    d.on_key(ctrl('n'));
+    for c in "Nightly check".chars() {
+        d.on_key(k(KeyCode::Char(c)));
+    }
+    d.on_key(k(KeyCode::Enter));
+    for c in "check {thing}".chars() {
+        d.on_key(k(KeyCode::Char(c)));
+    }
+    d.on_key(k(KeyCode::Enter));
+    assert!(matches!(d.mode, Mode::Prompts(_)));
+    assert_eq!(
+        d.cfg.get("prompt.nightly-check").as_deref(),
+        Some("check {thing}")
+    );
+    for c in "nightly".chars() {
+        d.on_key(k(KeyCode::Char(c)));
+    }
+    d.on_key(ctrl('t'));
+    for c in "ops".chars() {
+        d.on_key(k(KeyCode::Char(c)));
+    }
+    d.on_key(k(KeyCode::Enter));
+    assert_eq!(
+        crate::prompts::get(&d.cfg, "nightly-check").unwrap().tags,
+        vec!["ops".to_string()]
+    );
+    // ctrl+d twice deletes yours; a starter stays
+    for c in "nightly".chars() {
+        d.on_key(k(KeyCode::Char(c)));
+    }
+    d.on_key(ctrl('d'));
+    assert!(crate::prompts::get(&d.cfg, "nightly-check").is_some());
+    d.on_key(ctrl('d'));
+    assert!(crate::prompts::get(&d.cfg, "nightly-check").is_none());
+    d.on_key(k(KeyCode::Esc));
+    for c in "security".chars() {
+        d.on_key(k(KeyCode::Char(c)));
+    }
+    d.on_key(ctrl('d'));
+    d.on_key(ctrl('d'));
+    assert!(crate::prompts::get(&d.cfg, "security").is_some());
+    d.on_key(k(KeyCode::Esc));
+    d.on_key(k(KeyCode::Esc));
+    assert!(matches!(d.mode, Mode::Normal));
+}
+
+/// ctrl+p in the new-session form: the library for its agent, and back with the text.
+#[test]
+fn the_new_session_form_takes_a_prompt_from_the_library() {
+    let mut d = dash_own();
+    let _ = render(&mut d, 150, 40);
+    let mut nf = forms::NewForm::new(&d, "b31", Some("/srv/px"));
+    nf.set_agent("codex");
+    d.mode = Mode::NewForm(nf);
+    let s = render(&mut d, 150, 40);
+    assert!(s.contains("ctrl+p your prompts"), "{s}");
+    d.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+    let s = render(&mut d, 150, 40);
+    assert!(
+        s.contains("@review-codex") && !s.contains("@review-claude"),
+        "{s}"
+    );
+    // type to narrow, enter puts it in, enter goes back to the form
+    for c in "review".chars() {
+        d.on_key(k(KeyCode::Char(c)));
+    }
+    d.on_key(k(KeyCode::Enter));
+    d.on_key(k(KeyCode::Enter));
+    let Mode::NewForm(_) = &d.mode else {
+        panic!("not back in the form")
+    };
+    let s = render(&mut d, 150, 40);
+    assert!(s.contains("Review the uncommitted"), "{s}");
+    // esc from the library doesn't lose the form either
+    d.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+    d.on_key(k(KeyCode::Esc));
+    d.on_key(k(KeyCode::Esc));
+    assert!(matches!(d.mode, Mode::NewForm(_)));
+}
+
 /// ctrl+p pins a session on top of ctrl+k, three at most, and again unpins it.
 #[test]
 fn the_palette_pins_three_sessions_on_top() {
-    let mut d = dash();
+    let mut d = dash_own();
     let mut keys: Vec<String> = d.fleet.sessions().iter().map(|s| s.key()).collect();
     let mut more = d.fleet.host("b31").unwrap().sessions[0].clone();
     more.pane_id = "w1:p77".into();
@@ -913,7 +1041,7 @@ fn the_palette_pins_three_sessions_on_top() {
 /// on, or a named one), a preset, or ctrl+t's folder browser.
 #[test]
 fn launch_keys_start_and_open() {
-    let mut d = dash();
+    let mut d = dash_own();
     for (k, v) in [
         ("launch.T", "terminal /srv/x"),
         ("launch.U", "terminal gpu2:/opt/y"),
@@ -3562,8 +3690,8 @@ fn the_prompt_library_fills_variables_and_saves_what_you_wrote() {
     let r = render(&mut d, 120, 34);
     assert!(r.contains("@review") && r.contains("@explain"), "{r}");
     // explain needs {topic}: asked, then filled in with the session's folder
-    for _ in 0..4 {
-        d.on_key(k(KeyCode::Down));
+    for c in "explain".chars() {
+        d.on_key(k(KeyCode::Char(c)));
     }
     d.on_key(k(KeyCode::Enter));
     let r = render(&mut d, 120, 34);

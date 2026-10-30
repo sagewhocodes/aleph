@@ -222,6 +222,8 @@ const FAMILIES: &[(&str, &str)] = &[
     ("theme.", "themes"),
     // the prompt library: prompt.<name> → [prompts]
     ("prompt.", "prompts"),
+    ("prompt_tags.", "prompt_tags"),
+    ("prompt_agents.", "prompt_agents"),
     // hand-offs: handoff.summary, handoff.fallback, handoff.to → [handoff]
     ("handoff.", "handoff"),
     // races: race.agents → [race]
@@ -281,6 +283,8 @@ pub const SECTIONS: &[(&str, &str)] = &[
     ("presets", "saved starting points"),
     ("keys", "dashboard key overrides"),
     ("actions", "custom keys: label|command"),
+    ("prompt_tags", "each prompt's scenarios"),
+    ("prompt_agents", "the agents a prompt is only for"),
     (
         "launch",
         "keys that start something: terminal, terminal [machine:]/folder, or a preset",

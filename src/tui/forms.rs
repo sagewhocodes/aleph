@@ -137,12 +137,24 @@ pub(crate) enum For {
     Race(String, String),
     /// Usage's filters, typed (`/`)
     UsageQuery,
+    /// the prompt library: a new prompt's name
+    PromptNew,
+    /// the prompt library: this prompt's text
+    PromptEdit(String),
+    /// the prompt library: this prompt's scenarios
+    PromptTags(String),
+    /// the prompt library: the agents this prompt is for
+    PromptAgents(String),
+    /// the new-session form's first prompt, back to the form
+    FormPrompt(Box<NewForm>),
 }
 
 /// The prompt library inside an input (ctrl+p, or `@name` and enter).
 pub(crate) struct Lib {
     list: Vec<crate::prompts::Prompt>,
     sel: usize,
+    /// typed to narrow the list
+    q: Field,
     /// the text before the library opened (esc puts it back)
     before: String,
     /// a chosen prompt's variables, asked one by one
@@ -181,7 +193,12 @@ impl Input {
     fn writes_prompt(&self) -> bool {
         matches!(
             self.purpose,
-            For::Send(_) | For::QueueTo(..) | For::QueueEach(_) | For::Queue(..) | For::Race(..)
+            For::Send(_)
+                | For::QueueTo(..)
+                | For::QueueEach(_)
+                | For::Queue(..)
+                | For::Race(..)
+                | For::FormPrompt(_)
         )
     }
 
@@ -205,12 +222,19 @@ impl Input {
                 dir: d.clone(),
                 ..Default::default()
             },
+            For::FormPrompt(nf) => Ctx {
+                host: nf.host(),
+                dir: nf.folder.text.trim().to_string(),
+                agent: crate::agents::label(nf.agent_id()),
+                kind: nf.agent_id().to_string(),
+                ..Default::default()
+            },
             _ => Ctx::default(),
         }
     }
 
     /// Use prompt `p`: filled in at once, or its variables asked first.
-    fn choose(&mut self, p: crate::prompts::Prompt, before: String) {
+    pub(crate) fn choose(&mut self, p: crate::prompts::Prompt, before: String) {
         let ctx = self.ctx();
         let left = crate::prompts::asks(&p.text, &ctx);
         if left.is_empty() {
@@ -221,6 +245,7 @@ impl Input {
             self.lib = Some(Lib {
                 list: Vec::new(),
                 sel: 0,
+                q: Field::default(),
                 before,
                 filling: Some(Filling {
                     prompt: p,
@@ -257,17 +282,22 @@ impl Input {
                 self.lib = Some(lib);
                 return Res::Keep;
             }
-            let n = lib.list.len().max(1);
+            let shown = lib.shown();
+            let n = shown.len().max(1);
             match k.code {
                 KeyCode::Down => lib.sel = (lib.sel + 1) % n,
                 KeyCode::Up => lib.sel = (lib.sel + n - 1) % n,
                 KeyCode::Enter => {
-                    if let Some(p) = lib.list.get(lib.sel).cloned() {
+                    if let Some(p) = shown.get(lib.sel).cloned() {
                         self.choose(p, lib.before);
                     }
                     return Res::Keep;
                 }
-                _ => {}
+                _ => {
+                    if lib.q.key(&k) {
+                        lib.sel = 0;
+                    }
+                }
             }
             self.lib = Some(lib);
             return Res::Keep;
@@ -275,9 +305,16 @@ impl Input {
         if self.writes_prompt() {
             match k.code {
                 KeyCode::Char('p') if ctrl => {
+                    // what suits the agent it's for, when that's known
+                    let kind = self.ctx().kind;
                     self.lib = Some(Lib {
-                        list: crate::prompts::all(cfg),
+                        list: if kind.is_empty() {
+                            crate::prompts::all(cfg)
+                        } else {
+                            crate::prompts::for_agent(cfg, &kind)
+                        },
                         sel: 0,
+                        q: Field::default(),
                         before: self.f.text.clone(),
                         filling: None,
                     });
@@ -300,7 +337,7 @@ impl Input {
                     if let Some(p) = t
                         .strip_prefix('@')
                         .filter(|n| !n.is_empty() && !n.contains(char::is_whitespace))
-                        .and_then(|_| crate::prompts::get(cfg, &t))
+                        .and_then(|_| crate::prompts::resolve(cfg, &t, &self.ctx().kind))
                     {
                         self.choose(p, t);
                         return Res::Keep;
@@ -340,23 +377,27 @@ impl Input {
         let mut lines = Vec::new();
         match &self.lib {
             // the prompt library: pick one
-            Some(Lib {
-                list,
-                sel,
-                filling: None,
-                ..
-            }) => {
-                lines.push(Line::from(Span::styled(
-                    "your prompts (and the starters): enter puts one in",
-                    ui::muted(),
-                )));
+            Some(
+                lib @ Lib {
+                    sel, filling: None, ..
+                },
+            ) => {
+                let mut top = vec![Span::styled("› ", ui::fg(c::ACCENT()))];
+                top.extend(
+                    lib.q
+                        .spans(true, "your prompts and the starters: type to narrow"),
+                );
+                lines.push(Line::from(top));
                 lines.push(Line::raw(""));
-                for (i, p) in list.iter().enumerate() {
+                let shown = lib.shown();
+                let room = area.height.saturating_sub(9).clamp(3, 14) as usize;
+                let start = sel.saturating_sub(room - 1);
+                for (i, p) in shown.iter().enumerate().skip(start).take(room) {
                     let on = i == *sel;
                     lines.push(Line::from(vec![
                         Span::styled(if on { "┃ " } else { "  " }, ui::fg(c::ACCENT())),
                         Span::styled(
-                            format!("@{}  ", ui::pad(&p.name, 10)),
+                            format!("@{}  ", ui::pad(&p.name, 13)),
                             if on {
                                 ui::fg(c::ACCENT()).add_modifier(Modifier::BOLD)
                             } else {
@@ -364,7 +405,7 @@ impl Input {
                             },
                         ),
                         Span::styled(
-                            ui::trunc(&p.text, (w as usize).saturating_sub(20)),
+                            ui::trunc(&p.text, (w as usize).saturating_sub(23)),
                             if on { Style::new() } else { ui::muted() },
                         ),
                     ]));
@@ -436,6 +477,33 @@ impl Input {
             r,
         );
     }
+}
+
+/// esc in a box that came from somewhere: back there.
+pub(crate) fn cancelled(d: &mut Dash, i: Input) {
+    match i.purpose {
+        For::FormPrompt(nf) => d.mode = super::Mode::NewForm(*nf),
+        For::PromptNew | For::PromptEdit(_) | For::PromptTags(_) | For::PromptAgents(_) => {
+            super::promptlib::open(d)
+        }
+        _ => {}
+    }
+}
+
+/// ctrl+p in the new-session form: the library, for its first prompt.
+pub(crate) fn form_prompts(d: &mut Dash, nf: NewForm) {
+    let text = nf.prompt.text.clone();
+    let mut i = Input::new(
+        "First prompt".into(),
+        "enter puts it in the form",
+        text,
+        For::FormPrompt(Box::new(nf)),
+    );
+    let _ = i.key_in(
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &d.cfg,
+    );
+    d.mode = super::Mode::Input(i);
 }
 
 pub(crate) fn submit_input(d: &mut Dash, mut i: Input) -> Option<Handoff> {
@@ -541,6 +609,40 @@ pub(crate) fn submit_input(d: &mut Dash, mut i: Input) -> Option<Handoff> {
             }
             // back to what you were writing it for, the text still there
             d.mode = super::Mode::Input(*orig);
+        }
+        For::PromptNew => {
+            let name = crate::prompts::slug(&text);
+            if name.is_empty() {
+                i.err = Some("a name with a letter or digit in it".into());
+                d.mode = super::Mode::Input(i);
+                return None;
+            }
+            d.mode = super::Mode::Input(Input::new(
+                format!("New prompt @{name}"),
+                "{dir} {folder} {host} {session} {agent} {task} {date} {time} fill themselves in; any other {word} is asked",
+                String::new(),
+                For::PromptEdit(name),
+            ));
+        }
+        For::PromptEdit(ref name) => {
+            if !text.is_empty() {
+                super::settings::save(d, &format!("prompt.{name}"), &text);
+                d.toast(Level::Ok, format!("saved @{name}"));
+            }
+            super::promptlib::open(d);
+        }
+        For::PromptTags(ref name) => {
+            super::settings::save(d, &format!("prompt_tags.{name}"), &text);
+            super::promptlib::open(d);
+        }
+        For::PromptAgents(ref name) => {
+            super::settings::save(d, &format!("prompt_agents.{name}"), &text);
+            super::promptlib::open(d);
+        }
+        For::FormPrompt(nf) => {
+            let mut nf = *nf;
+            nf.set_prompt(&text);
+            d.mode = super::Mode::NewForm(nf);
         }
         For::UsageQuery => match super::usage_filters::parse_query(d, &text) {
             Ok(f) => {
@@ -1551,10 +1653,10 @@ impl NewForm {
             lines.extend(self.model_lines(cfg, t0, w as usize));
         }
         let mut l4 = vec![bar(AT_PROMPT), label(AT_PROMPT, "prompt")];
-        l4.extend(
-            self.prompt
-                .spans(self.at == AT_PROMPT, "optional first prompt"),
-        );
+        l4.extend(self.prompt.spans(
+            self.at == AT_PROMPT,
+            "optional first prompt · ctrl+p your prompts",
+        ));
         lines.push(Line::from(l4));
         let mut l5 = vec![bar(AT_WORKTREE), label(AT_WORKTREE, "worktree")];
         l5.extend(
@@ -1723,6 +1825,7 @@ pub(crate) fn submit_new(d: &mut Dash, mut nf: NewForm) -> Option<Handoff> {
                 .map(|b| String::from_utf8_lossy(b).into_owned())
                 .unwrap_or_default(),
             agent: o.agent.clone(),
+            kind: o.agent.clone(),
             ..Default::default()
         };
         match crate::prompts::expand(&d.cfg, &p, &ctx, &[]) {
@@ -1761,6 +1864,17 @@ pub(crate) fn submit_new(d: &mut Dash, mut nf: NewForm) -> Option<Handoff> {
     }
     super::quick::begin(d, &host, o, false);
     None
+}
+
+impl Lib {
+    /// The prompts what's typed leaves.
+    fn shown(&self) -> Vec<crate::prompts::Prompt> {
+        self.list
+            .iter()
+            .filter(|p| crate::prompts::matches(p, &self.q.text))
+            .cloned()
+            .collect()
+    }
 }
 
 // ------------------------------------------------------------------ add host

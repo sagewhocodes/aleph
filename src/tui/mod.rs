@@ -32,6 +32,7 @@ mod news;
 pub(crate) mod outside;
 mod palette;
 mod panes;
+pub(crate) mod promptlib;
 // showcase's autopilot tour drives the dashboard through this (navigation only)
 mod pilot;
 mod quick;
@@ -343,6 +344,8 @@ pub(crate) enum Mode {
     NewForm(forms::NewForm),
     HostForm(forms::HostForm),
     Palette(palette::Palette),
+    /// the prompt library (ctrl+p)
+    Prompts(promptlib::PromptLib),
     Help(help::Help),
     Quick(quick::QuickStart),
     CloseList(quick::CloseList),
@@ -1451,11 +1454,19 @@ impl Dash {
                         self.mode = Mode::Input(i);
                         None
                     }
-                    forms::Res::Cancel => None,
+                    forms::Res::Cancel => {
+                        forms::cancelled(self, i);
+                        None
+                    }
                     forms::Res::Submit => forms::submit_input(self, i),
                 };
             }
+            Mode::Prompts(lib) => return promptlib::key(self, lib, k),
             Mode::NewForm(mut nf) => {
+                if key_str(&k) == "ctrl+p" {
+                    forms::form_prompts(self, nf);
+                    return None;
+                }
                 return match nf.key(k, &self.fleet) {
                     forms::Res::Keep => {
                         self.mode = Mode::NewForm(nf);
@@ -1625,6 +1636,11 @@ impl Dash {
         if let Some((_, what)) = self.keys.launch.iter().find(|(key, _)| *key == ks) {
             let what = what.clone();
             return quick::launch_key(self, &what);
+        }
+        // the prompt library: every view (key.prompts)
+        if self.keys.owner(&ks) == Some(Act::Prompts) {
+            promptlib::open(self);
+            return None;
         }
         // the alerts you missed and the last toasts: every view (key.alerts)
         if self.keys.owner(&ks) == Some(Act::Alerts) {
@@ -2025,6 +2041,7 @@ impl Dash {
             Mode::NewForm(nf) => nf.draw(self, f, area),
             Mode::HostForm(hf) => hf.draw(f, area),
             Mode::Palette(p) => p.draw(f, area, self.t0),
+            Mode::Prompts(lib) => promptlib::draw(self, lib, f, area),
             Mode::Help(h) => help::draw(self, f, area, h),
             Mode::Quick(q) => q.draw(self, f, area),
             Mode::Command(cl) => cl.draw(self, f, area),
@@ -2976,6 +2993,7 @@ fn in_moshi_session() -> bool {
 /// Fleet-view actions; each can be rebound with `key.<action>=<key>`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub(crate) enum Act {
+    Prompts,
     Up,
     Down,
     PrevSession,
@@ -3185,6 +3203,12 @@ pub(crate) const ACTS: &[(Act, &str, &str, &str)] = &[
         "tile",
         "t",
         "move the marked sessions into one herdr tab",
+    ),
+    (
+        Act::Prompts,
+        "prompts",
+        "ctrl+p",
+        "the prompt library: browse, use, edit and save prompts, by scenario and agent",
     ),
     (Act::Hub, "hub", "H", "open the herdr hub"),
     (
