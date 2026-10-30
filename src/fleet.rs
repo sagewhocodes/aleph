@@ -602,6 +602,16 @@ impl Host {
 }
 
 impl Fleet {
+    /// The machines this computer can't reach. A machine that answers with no
+    /// herdr running isn't one of them: its agents' logs can still be read.
+    pub fn unreachable(&self) -> Vec<String> {
+        self.hosts
+            .iter()
+            .filter(|h| matches!(&h.conn, Conn::Down(e) if !not_running(e)))
+            .map(|h| h.alias.clone())
+            .collect()
+    }
+
     /// All fleet hosts, or just `only` (a `--host` override).
     pub fn new(cfg: &Config, only: Option<&str>) -> Fleet {
         // whether this computer is the one offline (the outage rule)

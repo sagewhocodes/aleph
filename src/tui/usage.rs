@@ -419,6 +419,57 @@ pub(crate) fn hints() -> Vec<(&'static str, &'static str)> {
 
 // ------------------------------------------------------------------ drawing
 
+/// A read this old is shown as late (the daemon reads every minute).
+const READ_LATE: u64 = 15 * 60;
+
+/// One line: each machine, and how its logs were last read. A read that failed
+/// says why, in red, so numbers that stopped moving have an explanation.
+pub(crate) fn reads_line(
+    cfg: &crate::config::Config,
+    reads: &[crate::usage::ReadState],
+    now: u64,
+    width: usize,
+) -> Line<'static> {
+    let failed = reads.iter().filter(|r| r.error.is_some()).count();
+    let mut l: Vec<Span<'static>> = Vec::new();
+    for r in reads {
+        let col = crate::theme::machine(cfg, &r.host);
+        l.push(Span::styled("▌", ui::fg(col)));
+        l.push(Span::styled(format!("{} ", r.host), ui::fg(col)));
+        let age = now.saturating_sub(r.at);
+        let (text, style) = match &r.error {
+            // one failure gets the room to say why; several, the first words
+            Some(e) => (
+                format!("✕ {}", ui::trunc(e, if failed == 1 { 72 } else { 24 })),
+                ui::fg(c::RED()),
+            ),
+            None if r.at == 0 => ("never read".to_string(), ui::muted()),
+            None if r.waiting > 0 => (
+                format!("⟳ {} files waiting", r.waiting),
+                ui::fg(c::YELLOW()),
+            ),
+            None if age > READ_LATE => (format!("✓ {}", ui::ago(age)), ui::fg(c::YELLOW())),
+            None => (format!("✓ {}", ui::ago(age)), ui::faint()),
+        };
+        l.push(Span::styled(text, style));
+        l.push(Span::raw("  "));
+    }
+    if failed > 0 {
+        l.push(Span::styled("aleph usage sources", ui::faint()));
+    }
+    // never past the edge: the last machines give way
+    let mut used = 0;
+    let keep = l
+        .iter()
+        .take_while(|s| {
+            used += ui::width(&s.content);
+            used <= width
+        })
+        .count();
+    l.truncate(keep);
+    Line::from(l)
+}
+
 pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
     if r.height < 4 || r.width < 30 {
         return;
@@ -450,14 +501,26 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
             ui::faint(),
         ));
     }
-    let [bar, top, body] = Layout::vertical([
+    // how each machine's logs were last read, whenever there's room for a line
+    let strip_h: u16 = if r.height >= 12 { 1 } else { 0 };
+    let [bar, top, strip, body] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
+        Constraint::Length(strip_h),
         Constraint::Min(1),
     ])
     .areas(r);
     super::usage_filters::chip_bar(d, f, bar);
     f.render_widget(Paragraph::new(Line::from(chips)), top);
+    if let Some(data) = &d.usage.data {
+        let line = reads_line(
+            &d.cfg,
+            &data.reads,
+            crate::cache::now(),
+            strip.width as usize,
+        );
+        f.render_widget(Paragraph::new(line), strip);
+    }
     // the OpenRouter account's own card, when there's a key
     let or = d
         .usage

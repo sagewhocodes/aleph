@@ -68,14 +68,14 @@ BEGIN {
   }
 }
 # the .meta.json of a subagent: the tool call that started it and its type (never its description)
-function clmeta(   m, l, s, sid, call, ty) {
+function clmeta(   m, l, s, se, call, ty) {
   m = FP; sub(/\.jsonl$/, ".meta.json", m); s = ""
   while ((getline l < m) > 0) s = s l
   close(m)
   if (s == "") return
   call = sval(s, "toolUseId", 1); ty = sval(s, "agentType", 1)
-  sid = FP; sub(/\/subagents\/.*/, "", sid); sub(/.*\//, "", sid)
-  print "sl\t\t" cl(sid) "\t" cl(LANE) "\t" cl(call) "\t" word(ty)
+  se = FP; sub(/\/subagents\/.*/, "", se); sub(/.*\//, "", se)
+  print "sl\t\t" cl(se) "\t" cl(LANE) "\t" cl(call) "\t" word(ty)
 }
 # a string value of a key in raw JSON: the first (or the last); ids and times only
 function sval(s, k, first,   p, i, r) {
@@ -274,15 +274,15 @@ function clrow(   c5, c1, cw, fl, rec, k, mo, ts) {
 # megabytes): the end of a tool call (its id, an error, a denial), else a prompt
 # and who sent it (origin.kind). The quotes of the raw line are its keys: a
 # string inside it has its quotes escaped.
-function cluser(   ts, sid, n, parts, i, id, st, o, by, k) {
-  ts = sval($0, "timestamp", 1); sid = sval($0, "sessionId", 0)
+function cluser(   ts, se, n, parts, i, id, st, o, by, k) {
+  ts = sval($0, "timestamp", 1); se = sval($0, "sessionId", 0)
   if (index($0, "\"tool_use_id\":\"")) {
     n = split($0, parts, "\"tool_use_id\":\"")
     for (i = 2; i <= n; i++) {
       id = substr(parts[i], 1, index(parts[i], "\"") - 1)
       st = index(parts[i], "\"is_error\":true") ? "err" : "ok"
       if (index($0, "\"permissionDecision\":{\"decision\":\"reject\"") || index($0, "\"toolDenialKind\":\"")) st = "denied"
-      if (id != "") print "ke\t" cl(ts) "\t" cl(sid) "\t" LANE "\t" cl(id) "\t" st "\t0"
+      if (id != "") print "ke\t" cl(ts) "\t" cl(se) "\t" LANE "\t" cl(id) "\t" st "\t0"
     }
     return
   }
@@ -291,7 +291,7 @@ function cluser(   ts, sid, n, parts, i, id, st, o, by, k) {
   by = "u"; if (o == "task-notification" || o == "peer") by = "a"; else if (o != "" && o != "human") by = "s"
   if (LANE != "") by = "a"
   k = sval($0, "promptId", 1); if (k == "") k = sval($0, "uuid", 1)
-  if (k != "") print "p\t" cl(ts) "\t" cl(sid) "\t" LANE "\t" cl(k) "\t" by
+  if (k != "") print "p\t" cl(ts) "\t" cl(se) "\t" LANE "\t" cl(k) "\t" by
 }
 
 # ---- Codex: per-response token_usage_record lines when the log has them,
@@ -513,15 +513,15 @@ function pwalk(h, s, e, lvl,   i, k, f, wt, n) {
     else return
   }
 }
-function agkv(h, s, e,   i, k, n, key, val) {
-  i = s; key = ""; val = ""
+function agkv(h, s, e,   i, k, n, key, value) {
+  i = s; key = ""; value = ""
   while (i < e) {
     k = pvar(h, i); i = PVI; if (k % 8 != 2) return
     n = pvar(h, i); i = PVI
-    if (int(k / 8) == 1) key = pstr(h, i, n); else if (int(k / 8) == 2) val = pstr(h, i, n)
+    if (int(k / 8) == 1) key = pstr(h, i, n); else if (int(k / 8) == 2) value = pstr(h, i, n)
     i += n
   }
-  if (key == "last_step_index" && val ~ /^[0-9]+$/) GSTEP = val + 0
+  if (key == "last_step_index" && value ~ /^[0-9]+$/) GSTEP = value + 0
 }
 # a PBH line (a request: 1.19 its model, 1.4.9 its thinking tokens) or PBW (the conversation:
 # its workspace, file:///…)
@@ -1177,6 +1177,8 @@ pub struct AgentSeen {
 /// Everything one run printed.
 #[derive(Clone, Debug, Default)]
 pub struct Output {
+    /// what went wrong in a run that still printed something (`read_problem`)
+    pub problem: Option<String>,
     pub hostname: String,
     pub home: String,
     pub now: u64,
@@ -1703,17 +1705,129 @@ pub(crate) mod tests {
         }
     }
 
+    /// Every awk program the script runs: the readers, and the short ones
+    /// inside its shell functions (`awk '…'`).
+    fn awk_programs() -> Vec<String> {
+        let mut v = vec![
+            READ_AWK.to_string(),
+            JOIN_AWK.to_string(),
+            STAT_AWK.to_string(),
+        ];
+        let mut rest = SCRIPT;
+        while let Some(i) = rest.find("awk ") {
+            let after = &rest[i + 4..];
+            let eol = after.find('\n').unwrap_or(after.len());
+            let Some(q) = after[..eol].find('\'') else {
+                rest = after;
+                continue;
+            };
+            let body = &after[q + 1..];
+            let Some(j) = body.find('\'') else { break };
+            v.push(body[..j].to_string());
+            rest = &body[j + 1..];
+        }
+        v
+    }
+
+    /// The awks on this computer, as commands. `ALEPH_REQUIRE_AWKS` (a space
+    /// list, set in CI) fails the test when one of them isn't there.
+    fn awks() -> Vec<Vec<&'static str>> {
+        let all: [&[&'static str]; 4] = [&["awk"], &["mawk"], &["gawk"], &["busybox", "awk"]];
+        let works = |c: &[&str]| {
+            Command::new(c[0])
+                .args(&c[1..])
+                .arg("BEGIN { exit 0 }")
+                .stdin(Stdio::null())
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+        let found: Vec<Vec<&str>> = all
+            .iter()
+            .filter(|c| works(c))
+            .map(|c| c.to_vec())
+            .collect();
+        for want in std::env::var("ALEPH_REQUIRE_AWKS")
+            .unwrap_or_default()
+            .split_whitespace()
+        {
+            assert!(
+                found.iter().any(|c| c[0] == want),
+                "{want} is required here (ALEPH_REQUIRE_AWKS) but isn't installed"
+            );
+        }
+        found
+    }
+
     #[test]
     fn awk_programs_parse() {
         // every awk here must at least load (mawk / BusyBox reject what gawk forgives)
-        for p in [READ_AWK, JOIN_AWK, STAT_AWK] {
-            let o = Command::new("awk")
-                .args(["-v", "K=claude", "-v", "LIM=-1", p])
-                .stdin(Stdio::null())
-                .output()
-                .unwrap();
-            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let programs = awk_programs();
+        assert!(programs.len() > 3, "the script's own awk programs");
+        for awk in awks() {
+            for p in &programs {
+                let o = Command::new(awk[0])
+                    .args(&awk[1..])
+                    .args(["-v", "K=claude", "-v", "LIM=-1", p])
+                    .stdin(Stdio::null())
+                    .output()
+                    .unwrap();
+                assert!(
+                    o.status.success(),
+                    "{awk:?}: {}\nin the program starting: {}",
+                    String::from_utf8_lossy(&o.stderr),
+                    p.chars().take(120).collect::<String>()
+                );
+            }
         }
+    }
+
+    /// The names a program defines as functions, and each definition's
+    /// parameters. A hand reading, enough for how these programs are written.
+    fn awk_functions(p: &str) -> Vec<(String, Vec<String>)> {
+        let mut out = Vec::new();
+        let mut rest = p;
+        while let Some(i) = rest.find("function ") {
+            let after = &rest[i + 9..];
+            let (Some(open), Some(close)) = (after.find('('), after.find(')')) else {
+                break;
+            };
+            if open < close {
+                let params = after[open + 1..close]
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                out.push((after[..open].trim().to_string(), params));
+            }
+            rest = &after[close.max(open) + 1..];
+        }
+        out
+    }
+
+    #[test]
+    fn no_awk_parameter_is_named_like_a_function() {
+        // this Mac's awk takes it; mawk, every Linux machine's, refuses the
+        // whole program, and no log gets read there at all
+        for p in awk_programs() {
+            let funcs = awk_functions(&p);
+            let names: Vec<&str> = funcs.iter().map(|(n, _)| n.as_str()).collect();
+            for (f, params) in &funcs {
+                for a in params {
+                    assert!(
+                        !names.contains(&a.as_str()),
+                        "function {f}: its parameter {a} is also a function"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_function_reading_finds_parameters() {
+        let f = awk_functions("function a(x, y,   z) { }\n  function b() { return 1 }");
+        assert_eq!(f[0].0, "a");
+        assert_eq!(f[0].1, vec!["x", "y", "z"]);
+        assert_eq!((f[1].0.as_str(), f[1].1.len()), ("b", 0));
     }
 
     #[test]

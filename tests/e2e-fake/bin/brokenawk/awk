@@ -1,0 +1,4 @@
+#!/bin/sh
+# The log reader refused, the way mawk refused it in 2.0.1 (any other awk works).
+case " $* " in *" K="*) echo "awk: line 473: syntax error at or near val" >&2; exit 2 ;; esac
+exec /usr/bin/awk "$@"

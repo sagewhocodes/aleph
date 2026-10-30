@@ -176,14 +176,8 @@ pub fn cmd(mut a: Args) -> ExitCode {
                 cfg_stamp = Some(s);
             }
         }
-        let down: Vec<String> = f
-            .hosts
-            .iter()
-            .filter(|h| matches!(h.conn, Conn::Down(_)))
-            .map(|h| h.alias.clone())
-            .collect();
         let t0 = std::time::Instant::now();
-        usage.tick(&a.cfg, &down);
+        usage.tick(&a.cfg, &f.unreachable());
         slow("usage", t0);
         // `cargo install` / `aleph update` replaced the binary: carry on as
         // the new one (an old watch would run the hub with yesterday's rules)

@@ -65,6 +65,8 @@ fi
 # aleph on this machine's PATH: $ST/aleph_<host> (this build with the
 # machine's own HOME, env.sh's rbin); the machine's folders, never this one's
 P="$BIN:/usr/bin:/bin"; [[ -f $ST/aleph_$host && -n ${ALEPH_FAKE_RBIN:-} ]] && P="$ALEPH_FAKE_RBIN:$P"
+# an awk that refuses the log reader, as mawk once did: $ST/brokenawk_<host>
+[[ -f $ST/brokenawk_$host ]] && P="$HERE/brokenawk:$P"
 export XDG_CACHE_HOME= XDG_STATE_HOME= XDG_DATA_HOME=
 # the services probe reads a simulated machine from $ST/svc_<host> (see reset.sh)
 SVC=; [[ -d $ST/svc_$host ]] && SVC=$ST/svc_$host

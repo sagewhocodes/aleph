@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::prices;
 use crate::ui;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 /// One agent session's numbers, from its own logs.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -74,8 +74,8 @@ pub struct Data {
     pub insights: Vec<(String, String)>,
     /// the newest rate-limit snapshot per machine and agent (store::limits)
     pub limits: Value,
-    /// per machine: when its logs were last read
-    pub sources: BTreeMap<String, u64>,
+    /// per machine: how its logs were last read
+    pub reads: Vec<super::ReadState>,
     /// agent session id → its numbers (this month and last)
     pub live: HashMap<String, Live>,
     /// machine → today's totals
@@ -324,7 +324,7 @@ pub fn load_split(
         heat,
         insights,
         limits: store::limits(),
-        sources: super::last_ok(),
+        reads: super::reads(&cfg.fleet()),
         live,
         today,
         names,

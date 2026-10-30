@@ -54,6 +54,15 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # the awk Ubuntu and Debian machines really run: mawk refuses programs
+      # other awks accept, and a reader that doesn't load reads nothing
+      - name: awks
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y mawk gawk busybox
+          sudo update-alternatives --set awk /usr/bin/mawk
+          awk -W version | head -1
+          echo "ALEPH_REQUIRE_AWKS=mawk gawk busybox" >> "$GITHUB_ENV"
       - name: clippy
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: unit tests
@@ -74,8 +83,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: tools
         run: |
-          command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
+          sudo apt-get update && sudo apt-get install -y jq mawk gawk
+          sudo update-alternatives --set awk /usr/bin/mawk
           jq --version
+          awk -W version | head -1
       - name: build
         run: cargo build --locked
       - name: smoke

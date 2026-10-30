@@ -967,7 +967,7 @@ fn run_one(host: &str, script: &str, timeout: Duration) -> Result<extract::Outpu
     )
     .map_err(|e| format!("couldn't start: {e}"))?;
     let text = o.text();
-    let out = extract::parse_output(&text, host);
+    let mut out = extract::parse_output(&text, host);
     if out.hostname.is_empty() && out.files.is_empty() {
         return Err(if o.timed_out {
             "timed out".into()
@@ -975,7 +975,39 @@ fn run_one(host: &str, script: &str, timeout: Duration) -> Result<extract::Outpu
             o.reason()
         });
     }
+    out.problem = read_problem(&out, &o);
     Ok(out)
+}
+
+/// What went wrong in a run that still printed something: a script that never
+/// reached its end, or files whose reader never finished (its awk refused to
+/// load, say, when the bytes were still counted and nothing came of them).
+/// None: a clean read.
+fn read_problem(out: &extract::Output, o: &proc::Out) -> Option<String> {
+    let done = out.files.iter().filter(|f| f.next.is_some()).count();
+    if !out.ended {
+        return Some(if o.timed_out {
+            format!("timed out after {done} files; the rest wait for the next read")
+        } else {
+            format!("stopped before the end ({done} files read): {}", o.reason())
+        });
+    }
+    let failed = out.files.len() - done;
+    if failed == 0 {
+        return None;
+    }
+    let why = o
+        .stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| l.contains("awk"))
+        .map(str::to_string)
+        .unwrap_or_else(|| o.reason());
+    let why: String = why.chars().take(160).collect();
+    Some(format!(
+        "the log reader failed on {failed} of {} files: {why}",
+        out.files.len()
+    ))
 }
 
 /// Fold one machine's run into the offsets; the records to append.
@@ -1132,7 +1164,7 @@ pub fn sync_with(
     let mut pending = 0;
     let mut reports = Vec::new();
     for h in hosts {
-        let o = opts_for(cfg, h);
+        let mut o = opts_for(cfg, h);
         if o.agents.is_empty() {
             let r = Report {
                 host: h.clone(),
@@ -1142,6 +1174,17 @@ pub fn sync_with(
             progress(&r);
             reports.push(r);
             continue;
+        }
+        // the last read ran out of time (a machine busy with other work): ask
+        // for less, so at least one file finishes and the read moves on
+        let timed_out = offsets
+            .hosts
+            .get(h)
+            .and_then(|s| s.run.as_ref())
+            .and_then(|r| r.error.as_deref())
+            .is_some_and(|e| e.starts_with("timed out"));
+        if timed_out {
+            o.max_bytes = (o.max_bytes / 4).max(1 << 20);
         }
         if full {
             offsets.hosts.remove(h);
@@ -1189,10 +1232,16 @@ pub fn sync_with(
                 // whose each request was (exact when its time is in a sighting)
                 let at = if out.now > 0 { out.now } else { now };
                 accounts::stamp(&mut book, &h, &mut out, at);
+                let before = st.clone();
                 let (recs, mut rep) = apply(st, &out, &agents_on);
+                rep.error = out.problem.clone();
                 match store::append(&recs) {
                     Ok(ms) => touched.extend(ms),
-                    Err(e) => rep.error = Some(format!("couldn't save the records: {e}")),
+                    Err(e) => {
+                        // nothing was kept: the same bytes get read again next time
+                        *st = before;
+                        rep.error = Some(format!("couldn't save the records: {e}"));
+                    }
                 }
                 // what the agents did (the timeline): from the files read to their end
                 let done: Vec<steps::Step> = out
@@ -1222,7 +1271,7 @@ pub fn sync_with(
                 st.run = Some(store::RunInfo {
                     at: now,
                     took_ms: took.as_millis() as u64,
-                    error: None,
+                    error: rep.error.clone(),
                     hostname: out.hostname.clone(),
                     home: out.home.clone(),
                     files_read: rep.files_read,
@@ -1389,7 +1438,41 @@ pub fn sync_all(cfg: &Config) -> Vec<Report> {
     if !enabled(cfg) {
         return Vec::new();
     }
-    sync(cfg, &cfg.fleet(), false, Duration::from_secs(0), |_| {})
+    sync(cfg, &cfg.fleet(), false, LOCK_WAIT, |_| {})
+}
+
+/// How long a background read waits its turn when another is running (off
+/// the UI thread; a round that gives up simply waits for the next one).
+const LOCK_WAIT: Duration = Duration::from_secs(30);
+
+/// How a machine's logs were last read (the strip on the Usage screen).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReadState {
+    pub host: String,
+    /// when it was last tried (0: never)
+    pub at: u64,
+    pub error: Option<String>,
+    /// files the last read's budget left for the next one
+    pub waiting: u64,
+}
+
+/// These machines' last reads, from the store.
+pub fn reads(hosts: &[String]) -> Vec<ReadState> {
+    let st = store::Offsets::load();
+    hosts
+        .iter()
+        .map(|h| {
+            let run = st.hosts.get(h).and_then(|s| s.run.as_ref());
+            ReadState {
+                host: h.clone(),
+                at: run.map_or(0, |r| r.at),
+                error: run.and_then(|r| r.error.clone()),
+                waiting: run
+                    .and_then(|r| r.budget.as_ref())
+                    .map_or(0, |(_, files, _)| *files),
+            }
+        })
+        .collect()
 }
 
 /// When the last sync that worked finished, per machine.
@@ -1470,7 +1553,7 @@ impl Background {
                 &cfg,
                 &hosts,
                 false,
-                Duration::from_secs(0),
+                LOCK_WAIT,
                 &|h| turn.contains(h),
                 |_| {},
             );
@@ -1490,6 +1573,66 @@ impl Background {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const HEAD: &str = "H\tbox\t/home/u\t100\tgnu\t\t\n";
+    const FILE: &str = "F\tclaude\tclaude\t/home/u/.claude/projects/p/a.jsonl\t1\t2\t500\t90\t0\n";
+
+    fn stderr(s: &str) -> proc::Out {
+        proc::Out {
+            code: Some(0),
+            stderr: s.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_reader_that_never_loads_is_an_error_not_a_clean_read() {
+        // what mawk did to every Linux machine: each file's bytes counted, its
+        // reader refused, the script ending normally with nothing from it
+        let text = format!("{HEAD}{FILE}E\t100\t1\t500\n");
+        let out = extract::parse_output(&text, "box");
+        assert!(out.ended);
+        let e = read_problem(
+            &out,
+            &stderr("Warning: x\nawk: line 473: syntax error at or near val\n"),
+        )
+        .unwrap();
+        assert!(
+            e.contains("failed on 1 of 1 files") && e.contains("syntax error"),
+            "{e}"
+        );
+        // its offsets don't move, so the next read after a fix gets those bytes
+        let mut st = store::HostState::default();
+        let (recs, rep) = apply(&mut st, &out, &["claude".to_string()]);
+        assert!(recs.is_empty() && st.files.is_empty() && rep.files_read == 0);
+    }
+
+    #[test]
+    fn a_read_that_stops_early_says_so() {
+        let unfinished = extract::parse_output(&format!("{HEAD}{FILE}"), "box");
+        let timed = proc::Out {
+            timed_out: true,
+            ..Default::default()
+        };
+        let e = read_problem(&unfinished, &timed).unwrap();
+        assert!(e.starts_with("timed out"), "{e}");
+        let e = read_problem(&unfinished, &stderr("sh: broken pipe")).unwrap();
+        assert!(
+            e.contains("stopped before the end") && e.contains("broken pipe"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_clean_read_has_no_problem() {
+        let f = "f\t/home/u/.claude/projects/p/a.jsonl\t500\t-\t4\t500\n";
+        let out = extract::parse_output(&format!("{HEAD}{FILE}{f}E\t100\t1\t500\n"), "box");
+        assert_eq!(out.files[0].next, Some(500));
+        assert_eq!(read_problem(&out, &stderr("")), None);
+        // nothing to read at all: fine too
+        let none = extract::parse_output(&format!("{HEAD}E\t100\t0\t0\n"), "box");
+        assert_eq!(read_problem(&none, &stderr("")), None);
+    }
 
     #[test]
     fn codex_is_asked_once_per_account_in_turn() {

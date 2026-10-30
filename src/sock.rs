@@ -285,6 +285,62 @@ pub fn view(host: &str, on: bool) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// `"a.b"` strings on a line, the way methods are written.
+    fn method_names(line: &str) -> Vec<String> {
+        line.split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|s| {
+                s.contains('.')
+                    && s.split('.').all(|p| {
+                        !p.is_empty() && p.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                    })
+            })
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                sources(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+
+    #[test]
+    fn every_method_aleph_calls_is_one_herdr_has() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let known: Vec<String> =
+            std::fs::read_to_string(root.join("tests/fixtures/herdr/methods.txt"))
+                .unwrap()
+                .lines()
+                .filter(|l| !l.starts_with('#') && !l.is_empty())
+                .map(str::to_string)
+                .collect();
+        let mut files = Vec::new();
+        sources(&root.join("src"), &mut files);
+        let mut used = Vec::new();
+        for f in files {
+            let text = std::fs::read_to_string(&f).unwrap();
+            for l in text.lines() {
+                // herdr's socket, not our own API (daemon::request…, `api.rs`)
+                if l.contains("sock::call(")
+                    || l.contains("sock::request(")
+                    || l.contains("link.call(")
+                {
+                    used.extend(method_names(l));
+                }
+            }
+        }
+        assert!(!used.is_empty(), "the scan found no calls");
+        let unknown: Vec<&String> = used.iter().filter(|m| !known.contains(m)).collect();
+        assert!(unknown.is_empty(), "not in herdr's schema: {unknown:?}");
+    }
+
     #[test]
     fn requests_and_answers() {
         let l = line("aleph-1", "layout.export", &json!({"tab_id": "w1:t2"}));
