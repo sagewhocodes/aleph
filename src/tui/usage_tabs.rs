@@ -328,12 +328,53 @@ fn overview(d: &mut Dash, f: &mut Frame, r: Rect, data: &Data) {
             Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
                 .areas(rest);
         daily(d, f, left, data);
-        let [h, cal] = Layout::vertical([Constraint::Length(10), Constraint::Min(4)]).areas(right);
+        // the heatmap and calendar take what they draw; what's left of a tall
+        // screen goes to the costliest work
+        let [h, cal, more] = Layout::vertical([
+            Constraint::Length(10),
+            Constraint::Length(9),
+            Constraint::Min(0),
+        ])
+        .areas(right);
         heat(f, h, data);
         calendar(f, cal, data);
+        if more.height >= 4 {
+            costliest(f, more, data);
+        }
     } else {
         daily(d, f, rest, data);
     }
+}
+
+/// The costliest sessions in this range, as many as fit.
+fn costliest(f: &mut Frame, r: Rect, data: &Data) {
+    let inner = panel(f, r, "the costliest sessions");
+    lines(f, inner, session_rows(&data.more.stats));
+}
+
+/// A line per costly session: what it cost, its agent, machine, time, prompts, project.
+fn session_rows(st: &crate::usage::Stats) -> Vec<Line<'static>> {
+    st.top_sessions
+        .iter()
+        .map(|s| {
+            let mut p = s.key.splitn(3, ':');
+            let (h, a) = (p.next().unwrap_or(""), p.next().unwrap_or(""));
+            Line::from(vec![
+                Span::styled(format!("{:>8} ", money(s.cost())), ui::fg(c::ACCENT())),
+                Span::styled(format!("{:<12} ", crate::agents::label(a)), ui::bold()),
+                Span::styled(format!("{h:<8} "), ui::muted()),
+                Span::styled(format!("{:<7} ", ui::dur(s.active_secs())), ui::faint()),
+                Span::styled(
+                    format!(
+                        "{} pr · {}",
+                        s.prompts,
+                        s.projects.first().cloned().unwrap_or_default()
+                    ),
+                    ui::faint(),
+                ),
+            ])
+        })
+        .collect()
 }
 
 /// A breakdown row's numbers.
@@ -649,29 +690,7 @@ fn turns(d: &Dash, f: &mut Frame, r: Rect, data: &Data) {
     }
     lines(f, inner, v);
     let inner = panel(f, rr, "the costliest sessions");
-    let v: Vec<Line> = st
-        .top_sessions
-        .iter()
-        .map(|s| {
-            let mut p = s.key.splitn(3, ':');
-            let (h, a) = (p.next().unwrap_or(""), p.next().unwrap_or(""));
-            Line::from(vec![
-                Span::styled(format!("{:>8} ", money(s.cost())), ui::fg(c::ACCENT())),
-                Span::styled(format!("{:<12} ", crate::agents::label(a)), ui::bold()),
-                Span::styled(format!("{h:<8} "), ui::muted()),
-                Span::styled(format!("{:<7} ", ui::dur(s.active_secs())), ui::faint()),
-                Span::styled(
-                    format!(
-                        "{} pr · {}",
-                        s.prompts,
-                        s.projects.first().cloned().unwrap_or_default()
-                    ),
-                    ui::faint(),
-                ),
-            ])
-        })
-        .collect();
-    lines(f, inner, v);
+    lines(f, inner, session_rows(st));
     let _ = d;
 }
 
@@ -890,6 +909,9 @@ fn pivot(d: &Dash, f: &mut Frame, r: Rect, data: &Data) {
 }
 
 /// The sections of the long page, in order: (title, height).
+/// A long-page section shorter than this isn't drawn.
+const MIN_SECTION: u16 = 5;
+
 const PAGE: [(&str, u16); 7] = [
     ("numbers", 3),
     ("breakup", 6),
@@ -912,9 +934,13 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect, data: &Data) {
                 } else {
                     *h
                 };
-                if y + h > r.y + r.height {
+                // the section that doesn't fit whole takes what's left when
+                // that's enough to read, rather than a blank end of the screen
+                let left = (r.y + r.height).saturating_sub(y);
+                if left < MIN_SECTION {
                     break;
                 }
+                let h = h.min(left);
                 let rr = Rect::new(r.x, y, r.width, h);
                 match *name {
                     "numbers" => kpis(f, rr, data),

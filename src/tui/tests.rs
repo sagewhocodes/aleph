@@ -4682,6 +4682,29 @@ fn cmd_keys_are_never_letters_or_commands() {
 }
 
 #[test]
+fn usage_leaves_no_blank_end_on_a_tall_screen() {
+    use crate::usage::dash::Data;
+    let mut d = dash();
+    d.view = View::Monitor;
+    d.mon.sub = super::monitor_draw::Sub::Usage;
+    let mut data = Data::default();
+    data.total.requests = 3;
+    data.more.stats.top_sessions = vec![crate::usage::Row {
+        key: "b31:claude:conv-1".into(),
+        requests: 3,
+        ..Default::default()
+    }];
+    d.usage.data = Some(data);
+    let s = render(&mut d, 180, 60);
+    assert!(s.contains("the costliest sessions"), "{s}");
+    assert!(s.contains("Claude Code"), "{s}");
+    // the long page: the section that doesn't fit whole takes what's left
+    for (w, h) in [(120, 30), (180, 60), (80, 24)] {
+        let _ = render(&mut d, w, h);
+    }
+}
+
+#[test]
 fn usage_says_how_each_machine_was_read() {
     use crate::usage::ReadState;
     let d = dash();
