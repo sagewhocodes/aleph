@@ -14,6 +14,13 @@
 - **`z` maximises a tile, `z` goes back,** and the status line says so.
 - `space` no longer loses what you arranged by hand: your own arrangement is one of the layouts it cycles through.
 
+### Free splits
+- **Any pane can hold anything:** `v` and `s` split it, and the picker lists every machine's sessions, a new agent and a
+  terminal on any machine.
+- **Your arrangement stays.** A split Focus becomes a Tile, `w` comes back to it, and it survives a restart. Marked
+  sessions start a fresh one; `&` closes it.
+- **`alt+arrows` move between panes while typing,** and the keys go with you. With one pane they're the agent's.
+
 ### Keys that changed
 - **`ctrl+q` is the way out.** While typing into an agent it gives the keys back to Aleph; pressed again it goes to Fleet.
   `ctrl+]` isn't Aleph's any more and reaches the agent. The prefix and then `ctrl+q` sends it to the pane, for a shell

@@ -75,6 +75,8 @@ pub(crate) struct Palette {
     q: Field,
     items: Vec<(Item, String, String, Color)>,
     sel: usize,
+    /// its title and what the empty search line says
+    words: (&'static str, &'static str),
 }
 
 impl Palette {
@@ -106,6 +108,10 @@ impl Palette {
             .collect();
         Palette {
             q: Field::new(""),
+            words: (
+                "Go to anything",
+                "sessions, machines, views, @presets, folders…",
+            ),
             items,
             sel: 0,
         }
@@ -130,6 +136,10 @@ impl Palette {
             .retain(|(it, _, _, _)| matches!(it, Item::Session(_)));
         // or something new in it, on any machine
         if d.view == View::Wall {
+            p.words = (
+                "What goes in this pane",
+                "a session on any machine, a new agent, a terminal…",
+            );
             p.items.push((
                 Item::PaneNew,
                 "New agent in this pane…".into(),
@@ -563,6 +573,10 @@ impl Palette {
         }
         Palette {
             q: Field::default(),
+            words: (
+                "Go to anything",
+                "sessions, machines, views, @presets, folders…",
+            ),
             items,
             sel: 0,
         }
@@ -632,7 +646,7 @@ impl Palette {
             height: h,
         };
         crate::ui::clear(f, r);
-        let block = ui::panel("Go to anything", true);
+        let block = ui::panel(self.words.0, true);
         let inner = block.inner(r);
         f.render_widget(block, r);
         let mut lines = Vec::new();
@@ -640,10 +654,7 @@ impl Palette {
             "› ",
             ui::fg(c::ACCENT()).add_modifier(Modifier::BOLD),
         )];
-        ql.extend(
-            self.q
-                .spans(true, "sessions, machines, views, @presets, folders…"),
-        );
+        ql.extend(self.q.spans(true, self.words.1));
         lines.push(Line::from(ql));
         lines.push(Line::from(Span::styled(
             "─".repeat(inner.width as usize),
