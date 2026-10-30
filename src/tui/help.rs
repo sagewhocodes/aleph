@@ -264,6 +264,10 @@ pub(crate) fn entries(d: &Dash) -> Vec<Entry> {
         };
         v.push(e(k, &format!("{label} — {cmd}"), "Your actions", run));
     }
+    for (k, what) in &d.keys.launch {
+        let w = launch_words(what);
+        v.push(e(k, &w, "Your actions", Run::Note("press it in any view")));
+    }
     for (k, w) in [
         ("]", "Focus, Tile: the next session, on any machine"),
         ("[", "Focus, Tile: the previous session, on any machine"),
@@ -621,6 +625,13 @@ pub(crate) fn lines(d: &Dash) -> Vec<Line<'static>> {
             v.push(row(k.clone(), &format!("{label} — {cmd}")));
         }
     }
+    if !d.keys.launch.is_empty() {
+        v.push(Line::raw(""));
+        v.push(head("Start with one key (launch.<key>), in any view"));
+        for (k, what) in &d.keys.launch {
+            v.push(row(k.clone(), &launch_words(what)));
+        }
+    }
     // showcase mode's own keys (a build without it has none)
     let showcase = crate::showcase::help_keys(&d.cfg);
     if !showcase.is_empty() {
@@ -851,4 +862,13 @@ pub(crate) fn draw(d: &Dash, f: &mut Frame, area: Rect, h: &Help) {
         })
         .collect();
     f.render_widget(Paragraph::new(lines), body);
+}
+
+/// What a launch key does, in words.
+fn launch_words(what: &str) -> String {
+    match what.strip_prefix("terminal") {
+        Some("") => "a terminal in a folder you pick".to_string(),
+        Some(p) if p.starts_with(' ') => format!("a terminal in{p}"),
+        _ => format!("start preset {what}, in Focus"),
+    }
 }

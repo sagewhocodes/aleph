@@ -10,6 +10,24 @@
 # only a build with that feature carries them.
 
 [[entry]]
+id = "2.1.0-launch"
+date = "2026-10-31"
+title = "Starting things: one flow, an instant row"
+notes = [
+  "n is one flow now. Enter on a place, enter on the agent, and it's going. o does the same and opens it. A terminal is a choice beside the agents.",
+  "A start has its row straight away, with a spinner and what it's doing. Enter opens it once it's up.",
+  "A start that fails says why on its row: r tries again, x drops it. It no longer leaves an empty tab behind.",
+  "i names the agent it starts, and it's that machine's own default.",
+  "ctrl+t opens a terminal in a folder you pick. launch.<key> binds your own folder or preset to one key, in any view.",
+  "Fleet's / finds sessions by agent too.",
+]
+commits = [
+  "One launch flow: enter takes the place, enter on the agent starts it",
+  "A start has its row at once: spinner, steps, retry, drop",
+  "Launch keys and agent search",
+]
+
+[[entry]]
 id = "2.1.0-terminal"
 date = "2026-10-30"
 title = "Select and copy in any tile, free splits, terminals always ready"

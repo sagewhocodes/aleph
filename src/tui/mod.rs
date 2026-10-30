@@ -246,6 +246,8 @@ pub enum Handoff {
         target: Target,
         /// from Quick start: the folder goes back there, chosen (nothing starts)
         quick: Option<Box<quick::QuickStart>>,
+        /// a terminal is what the folder is for (ctrl+t)
+        terminal: bool,
     },
     MachineAdd(String),
     /// `aleph host setup` on this screen (when no new tab could open)
@@ -1476,6 +1478,7 @@ impl Dash {
                     quick::QuickRes::Browse => Some(Handoff::Browse {
                         target: self.target_of(&q.host),
                         quick: Some(Box::new(q)),
+                        terminal: false,
                     }),
                 };
             }
@@ -1603,6 +1606,11 @@ impl Dash {
         if ks == "ctrl+k" || (ks == "p" && self.view == View::Wall) {
             self.mode = Mode::Palette(palette::Palette::new(self));
             return None;
+        }
+        // what you start with one key (`launch.<key>`, ctrl+t): every view
+        if let Some((_, what)) = self.keys.launch.iter().find(|(key, _)| *key == ks) {
+            let what = what.clone();
+            return quick::launch_key(self, &what);
         }
         // the alerts you missed and the last toasts: every view (key.alerts)
         if self.keys.owner(&ks) == Some(Act::Alerts) {
@@ -3286,6 +3294,8 @@ pub(crate) const ACTS: &[(Act, &str, &str, &str)] = &[
 pub(crate) struct Keys {
     map: HashMap<String, Act>,
     pub(crate) custom: Vec<(String, String, String)>,
+    /// `launch.<key>`: (key, what it starts: see `quick::launch_key`)
+    pub(crate) launch: Vec<(String, String)>,
 }
 
 impl Keys {
@@ -3320,7 +3330,23 @@ impl Keys {
                 Some((k, label.trim().to_string(), cmd.trim().to_string()))
             })
             .collect();
-        Keys { map, custom }
+        let named = cfg.with_prefix("launch.");
+        // a terminal in a folder you pick, unless that key has gone elsewhere
+        // (`launch.ctrl+t = off` turns it off)
+        let free = !map.contains_key("ctrl+t") && !named.iter().any(|(k, _)| k == "ctrl+t");
+        let mut launch: Vec<(String, String)> = named
+            .into_iter()
+            .filter(|(_, v)| !v.trim().is_empty() && v.trim() != "off")
+            .map(|(k, v)| (k, v.trim().to_string()))
+            .collect();
+        if free {
+            launch.push(("ctrl+t".to_string(), "terminal".to_string()));
+        }
+        Keys {
+            map,
+            custom,
+            launch,
+        }
     }
     pub(crate) fn act(&self, k: &KeyEvent) -> Option<Act> {
         self.map.get(&key_str(k)).copied()
@@ -3654,9 +3680,14 @@ pub fn run_dashboard_in(tui: Tui, cfg: Config, start: Start) -> std::process::Ex
                 d.after_handoff(&h);
                 continue;
             }
-            Handoff::Browse { target, quick } => {
+            Handoff::Browse {
+                target,
+                quick,
+                terminal,
+            } => {
                 let mut bo = crate::browse::BrowseOpts::from_config(&d.cfg, target);
                 bo.sessions = d.fleet.host(&target.ssh).map(|h| h.sessions.clone());
+                bo.terminal = *terminal;
                 if let Some(q) = quick {
                     // the agent's settled: the browser starts it, as it says.
                     // Otherwise it only hands a folder back

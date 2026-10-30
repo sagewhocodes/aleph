@@ -839,6 +839,52 @@ pub(crate) fn begin(d: &mut Dash, host: &str, mut o: NewOpts, focus: bool) -> u6
     id
 }
 
+/// A launch key (`launch.<key>`): `terminal` (you pick the folder), `terminal
+/// [machine:]/folder`, or a preset's name. What it starts opens in Focus.
+pub(crate) fn launch_key(d: &mut Dash, what: &str) -> Option<Handoff> {
+    let here = if d.view == View::Wall {
+        super::wall::focused_session(d).map(|s| s.host)
+    } else {
+        d.fv.selected_host(d)
+    }
+    .or_else(|| d.fleet.hosts.first().map(|h| h.alias.clone()));
+    if what == "terminal" {
+        let Some(host) = here else {
+            d.note("no machine to open a terminal on");
+            return None;
+        };
+        return Some(Handoff::Browse {
+            target: d.target_of(&host),
+            quick: None,
+            terminal: true,
+        });
+    }
+    if let Some(place) = what.strip_prefix("terminal ") {
+        let place = place.trim();
+        let (host, dir) = match place.split_once(':') {
+            Some((h, p)) => (Some(h.to_string()), p),
+            None => (here, place),
+        };
+        let host = host.filter(|h| d.fleet.host(h).is_some());
+        match host {
+            Some(h) if dir.starts_with('/') => shell(d, &h, Some(dir)),
+            Some(_) => d.error(format!("launch key: `{dir}` isn't a full path")),
+            None => d.error(format!("launch key: no such machine in `{place}`")),
+        }
+        return None;
+    }
+    match crate::cli::parse_new(&[format!("@{what}")], &d.cfg) {
+        Ok(a) => match a.host.or(here) {
+            Some(h) => {
+                begin(d, &h, a.opts, true);
+            }
+            None => d.note("no machine to start it on"),
+        },
+        Err(e) => d.error(format!("launch key: {e}")),
+    }
+    None
+}
+
 /// The start itself, off the UI thread.
 fn run_start(d: &Dash, id: u64) {
     if cfg!(test) {

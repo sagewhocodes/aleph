@@ -13,6 +13,7 @@
 //!   preset.<name>.<field> saved starting points: host, dir, args, agent, worktree, prompt
 //!   key.<action>=<key>    dashboard key overrides
 //!   action.<key>=<label>|<command>   custom keys: run <command> in a new tab in the session's folder
+//!   launch.<key>=<what>   keys that start something and open it: terminal, terminal [machine:]/folder, or a preset
 //!   hook.pre_new / hook.post_new     commands run before the agent starts (remote) / after (local)
 //!
 //! Resolution order for the target host: `--host` flag > CC_SSH_HOST > CC_MACHINE
@@ -239,7 +240,7 @@ pub fn section_of(key: &str) -> &'static str {
         k if k.starts_with("host.") || k.starts_with("service.") => "Machines",
         k if k.starts_with("approve.") || k.starts_with("limits.") => "Automation",
         k if k.starts_with("key.") => "Keys",
-        k if k.starts_with("action.") => "Integrations",
+        k if k.starts_with("action.") || k.starts_with("launch.") => "Integrations",
         k if k.starts_with("preset.") => "Presets",
         k if k.starts_with("analytics.")
             || k.starts_with("usage.")

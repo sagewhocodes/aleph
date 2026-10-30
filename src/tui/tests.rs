@@ -729,6 +729,70 @@ fn a_failed_start_says_why_retries_and_drops() {
     assert_eq!(d.starting[0].id, id);
 }
 
+/// One key, and it opens: a terminal in a fixed folder (on the machine you're
+/// on, or a named one), a preset, or ctrl+t's folder browser.
+#[test]
+fn launch_keys_start_and_open() {
+    let mut d = dash();
+    for (k, v) in [
+        ("launch.T", "terminal /srv/x"),
+        ("launch.U", "terminal gpu2:/opt/y"),
+        ("launch.V", "codexhere"),
+        ("preset.codexhere.agent", "codex"),
+        ("preset.codexhere.dir", "/srv/p"),
+    ] {
+        let _ = d.cfg.set(k, v);
+    }
+    d.keys = super::Keys::from_config(&d.cfg);
+    fleet::select(&mut d, fleet::RowId::Host("b31".into()));
+    assert!(d.on_key(ch_key('T')).is_none());
+    let st = d.starting.last().unwrap();
+    assert_eq!((st.host.as_str(), st.opts.agent.as_str()), ("b31", "shell"));
+    assert_eq!(st.opts.dir.as_deref(), Some(&b"/srv/x"[..]));
+    assert!(st.focus);
+    fleet::select(&mut d, fleet::RowId::Host("b31".into()));
+    assert!(d.on_key(ch_key('U')).is_none());
+    assert_eq!(d.starting.last().unwrap().host, "gpu2");
+    fleet::select(&mut d, fleet::RowId::Host("b31".into()));
+    assert!(d.on_key(ch_key('V')).is_none());
+    let st = d.starting.last().unwrap();
+    assert_eq!(st.opts.agent, "codex");
+    assert!(st.focus);
+    // ctrl+t: the browser, for a terminal
+    let ctrl_t = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+    assert!(matches!(
+        d.on_key(ctrl_t),
+        Some(Handoff::Browse { terminal: true, .. })
+    ));
+    // and it can be turned off
+    let _ = d.cfg.set("launch.ctrl+t", "off");
+    d.keys = super::Keys::from_config(&d.cfg);
+    assert!(!matches!(d.on_key(ctrl_t), Some(Handoff::Browse { .. })));
+    // a bad one says so, and starts nothing
+    let n = d.starting.len();
+    let _ = d.cfg.set("launch.W", "terminal nowhere:/srv");
+    d.keys = super::Keys::from_config(&d.cfg);
+    assert!(d.on_key(ch_key('W')).is_none());
+    assert_eq!(d.starting.len(), n);
+}
+
+/// Fleet's search finds a session by its agent, and says it can search.
+#[test]
+fn fleet_search_finds_agents_by_name() {
+    let mut d = dash();
+    let codex = Session {
+        agent: "codex".into(),
+        name: "plain-name".into(),
+        ..Default::default()
+    };
+    assert!(fleet::matches("codex", &codex));
+    assert!(!fleet::matches("gemini", &codex));
+    let h = fleet::hints(&d);
+    assert!(h.contains(&("/", "search")), "{h:?}");
+    d.fv.filter = "claude".into();
+    assert!(!fleet::rows(&d).is_empty());
+}
+
 /// More options carries the folder that was picked, and the agent.
 #[test]
 fn more_options_keeps_the_folder_you_picked() {

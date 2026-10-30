@@ -194,6 +194,8 @@ pub struct App {
     choosing: bool,
     /// `t` was the key that picked: a terminal, not an agent
     want_terminal: bool,
+    /// a terminal is what this browse is for (ctrl+t): `i` opens one
+    terminal_only: bool,
     ttl: u64,
     pub cache: Cache,
     rules: ignore::Rules,
@@ -296,6 +298,7 @@ impl App {
             },
             choosing: o.choosing,
             want_terminal: false,
+            terminal_only: o.terminal,
             ttl: o.ttl,
             cache,
             globs: rules.prune_globs(),
@@ -425,8 +428,8 @@ impl App {
         };
         match row.kind {
             // picking a folder isn't starting anything: enter takes it
-            Kind::Here if self.choosing => {
-                self.want_terminal = false;
+            Kind::Here if self.choosing || self.terminal_only => {
+                self.want_terminal = self.terminal_only;
                 self.pick(r);
             }
             Kind::Here => self.note(format!("i starts {} in this folder", self.agent)),
@@ -1101,7 +1104,7 @@ impl App {
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => self.open(r),
             KeyCode::Left | KeyCode::Backspace | KeyCode::Char('h') => self.up(r),
             KeyCode::Char('i') => {
-                self.want_terminal = false;
+                self.want_terminal = self.terminal_only;
                 self.enter(r);
             }
             KeyCode::Char('t') => {
@@ -1495,6 +1498,10 @@ impl App {
     fn row_item(&self, row: &Row, iw: usize) -> ListItem<'static> {
         let (left, lstyle): (String, Style) = match row.kind {
             Kind::Recent => (format!("★ {}", self.pretty(&row.name)), ui::fg(c::YELLOW())),
+            Kind::Here if self.terminal_only => (
+                format!("$ Terminal in {}", self.enter_label(row)),
+                ui::fg(c::ACCENT()).add_modifier(Modifier::BOLD),
+            ),
             Kind::Here if self.choosing => (
                 format!("✓ Use {}", self.enter_label(row)),
                 ui::fg(c::ACCENT()).add_modifier(Modifier::BOLD),
@@ -1597,7 +1604,9 @@ impl App {
                     if self.searching {
                         "type to search · /path or ~/ to jump ▏"
                     } else {
-                        if self.choosing {
+                        if self.terminal_only {
+                            "/ search · enter opens · i terminal here · n new folder "
+                        } else if self.choosing {
                             "/ search · enter opens · i uses it · t terminal · n new folder "
                         } else {
                             "/ search · enter opens · i starts here · t terminal · n new folder "
@@ -2080,7 +2089,9 @@ impl App {
                 &[
                     (
                         "i",
-                        if self.choosing {
+                        if self.terminal_only {
+                            "terminal here"
+                        } else if self.choosing {
                             "use this folder"
                         } else {
                             "start agent"
@@ -2115,7 +2126,11 @@ impl App {
                             "quit"
                         },
                     ),
-                ],
+                ]
+                .into_iter()
+                // browsing for a terminal, `i` already is the terminal key
+                .filter(|h| !(self.terminal_only && h.0 == "t"))
+                .collect::<Vec<_>>(),
                 r.width,
             )
         };
@@ -2225,6 +2240,8 @@ pub struct BrowseOpts {
     pub agent: String,
     /// picking a folder for Quick start: `i` hands it back, nothing starts
     pub choosing: bool,
+    /// picking a folder for a terminal (ctrl+t): `i` opens one there
+    pub terminal: bool,
 }
 
 impl BrowseOpts {
@@ -2250,6 +2267,7 @@ impl BrowseOpts {
                 .name
                 .to_string(),
             choosing: false,
+            terminal: false,
         }
     }
 }
@@ -2659,6 +2677,37 @@ mod tests {
         for ch in s.chars() {
             key(a, r, KeyCode::Char(ch));
         }
+    }
+
+    /// ctrl+t: the browser is for a terminal, so `i` opens one, whoever runs there.
+    #[test]
+    fn a_browse_for_a_terminal_opens_one() {
+        let mut r = dead();
+        let s = Session {
+            name: "ignite".into(),
+            label: "claude_ignite:proj".into(),
+            cwd: "/home/u/proj/".into(),
+            ..Default::default()
+        };
+        let mut a = app(vec![s]);
+        a.terminal_only = true;
+        open(&mut a, &mut r, "/home/u", &["proj", "notes"]);
+        let sc = screen(&mut a, 120, 20);
+        assert!(
+            sc.contains("Terminal in u") && sc.contains("terminal here"),
+            "{sc}"
+        );
+        key(&mut a, &mut r, KeyCode::Char('i'));
+        let (id, t) = a.choose.clone().unwrap();
+        a.on_remote(
+            Ev::Stat {
+                id,
+                res: Ok((1, t.clone())),
+            },
+            &mut r,
+        );
+        assert!(a.ask.is_none());
+        assert!(matches!(&a.done, Some(Some(Picked::Terminal(_)))));
     }
 
     /// `t`: a terminal in the folder, even beside a running agent. Picking for

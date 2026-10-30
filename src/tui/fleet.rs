@@ -137,12 +137,19 @@ fn strip_ansi(s: &str) -> String {
         .join("\n")
 }
 
-/// Does `s` match the filter (fuzzy on name, folder, title, machine)?
+/// Does `s` match the filter (fuzzy on name, agent, folder, title, machine)?
 pub(crate) fn matches(q: &str, s: &Session) -> bool {
     if q.trim().is_empty() {
         return true;
     }
-    let hay = format!("{} {} {} {}", s.display(), s.cwd, s.title, s.host);
+    let hay = format!(
+        "{} {} {} {} {}",
+        s.display(),
+        crate::agents::label(&s.agent),
+        s.cwd,
+        s.title,
+        s.host
+    );
     fuzzy::score(q, &hay).is_some()
 }
 
@@ -753,6 +760,7 @@ pub(crate) fn run_act(d: &mut Dash, act: Act) -> Option<Handoff> {
             return Some(Handoff::Browse {
                 target: d.target_of(&h),
                 quick: None,
+                terminal: false,
             });
         }
         Act::Wall => tile_here(d),
@@ -1203,6 +1211,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
             ("s", "prompt"),
             ("n", "new"),
             ("!", "terminal"),
+            ("/", "search"),
             ("space", "mark"),
             ("w", "tile"),
             (

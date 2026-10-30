@@ -201,6 +201,7 @@ const FAMILIES: &[(&str, &str)] = &[
     ("preset.", "presets"),
     ("key.", "keys"),
     ("action.", "actions"),
+    ("launch.", "launch"),
     ("approve.", "automation.rules"),
     // after a usage limit, what each agent is told: resume.<agent> → [automation.resume]
     ("resume.", "automation.resume"),
@@ -279,6 +280,10 @@ pub const SECTIONS: &[(&str, &str)] = &[
     ("presets", "saved starting points"),
     ("keys", "dashboard key overrides"),
     ("actions", "custom keys: label|command"),
+    (
+        "launch",
+        "keys that start something: terminal, terminal [machine:]/folder, or a preset",
+    ),
     ("updates", "self-update"),
     ("integrations", "Raycast and friends"),
     ("legacy", "keys Aleph doesn't know (kept, never dropped)"),

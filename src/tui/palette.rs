@@ -911,6 +911,7 @@ pub(crate) fn run(d: &mut Dash, p: Palette) -> Option<Handoff> {
             return Some(Handoff::Browse {
                 target: d.target_of(&h),
                 quick: None,
+                terminal: false,
             })
         }
         Item::Folder(h, dir) => {

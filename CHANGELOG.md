@@ -2,6 +2,27 @@
 
 ## 2.1.0 — in progress
 
+### Starting things
+- **`n` is one flow, for agents and terminals.** Enter on a place moves to the agent, enter on the agent starts it, and `o`
+  does the same and opens it in Focus. Nothing is marked and then left waiting for another key. A terminal is a choice beside
+  the agents and opens where you picked.
+- **The browser says what it's doing.** From `n` it reads "✓ Use this folder" and comes back to you, or starts straight
+  away if you'd already settled on an agent. Esc returns to `n` as you left it. More options keeps the folder you picked.
+- **`i` says what it starts:** "start Claude Code in a folder", the machine's own default, in the hints and in `ctrl+k`.
+  It used to name one agent and could start another: the fleet's default, not that machine's.
+- **A start has its row at once,** with a spinner and what it's doing, whichever way you began it. Enter opens it once it's
+  up; the selection follows it to the real session, unless you've moved on.
+- **A start that fails says why on its row.** `r` tries again with the same options, `x` drops it, and `x` also cancels one
+  still running. It no longer leaves an empty tab behind.
+- **A typed command is checked.** Agents started by typing into the shell used to report success whatever happened. Now
+  "command not found" and the like fail the start. It only counts as failed when the shell says so by name, so a slow
+  shell never closes a real tab.
+- **`ctrl+t` opens a terminal in a folder you pick,** and `t` does in any folder browser.
+- **`launch.<key>` binds your own:** `terminal /srv/train`, `terminal gpu2:/opt/x` or a preset's name. It works in any
+  view and opens in Focus. `launch.ctrl+t = off` frees that key.
+- Fleet's `/` finds sessions by agent too, and says it's there.
+- `n`, `i`, `!`, `D` and the new-session form all start in the background now; none of them takes over the screen.
+
 ### Selecting and copying
 - **Drag across any tile to select its text.** It's copied when you let go, as herdr does, in every tile rather than
   only the first; a line the terminal wrapped stays one line, and the screen holds still while you drag. Clicks still

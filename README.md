@@ -99,6 +99,7 @@ aleph doctor                         # check everything
 | `n` · `i` | New session (place, then agent or terminal) · start the machine's default agent in a folder |
 | `w` · `y` | Tile · approve |
 | `ctrl+a` · `ctrl+k` | Approvals · palette |
+| `ctrl+t` | A terminal in a folder you pick (`launch.<key>` binds your own: a folder, a preset) |
 | `ctrl+q` | Keys back to Aleph, then back to Fleet |
 | `[ ]` · `ctrl+[ ]` | Previous / next session, on any machine · machine (or `( )`) |
 | Drag | Select across a pane; copied when you let go (option+drag goes to the agent) |

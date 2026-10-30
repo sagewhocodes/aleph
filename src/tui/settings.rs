@@ -441,6 +441,11 @@ fn family_help(k: &str) -> String {
             "custom key {r} in Fleet: label|command, run in a new tab next to the session"
         );
     }
+    if let Some(r) = fam("launch.") {
+        return format!(
+            "key {r} in any view: terminal (pick the folder), terminal [machine:]/folder, or a preset's name; it opens in Focus"
+        );
+    }
     if let Some(r) = fam("preset.") {
         let (n, f) = r.rsplit_once('.').unwrap_or((r, ""));
         return format!("preset @{n}: its {f} (aleph new @{n}, or P in Fleet)");
@@ -452,6 +457,7 @@ fn add_help(p: &str) -> &'static str {
     match p {
         "approve." => "a new auto-approve rule: name=pattern, e.g. tests=*pytest*",
         "action." => "a new custom key: key=label|command, e.g. g=Git|lazygit",
+        "launch." => "a new launch key: key=terminal /folder, or key=a preset's name",
         _ => "a new entry: name=value",
     }
 }
@@ -481,7 +487,7 @@ fn rows_of(d: &Dash, sec: &str) -> Vec<Row> {
     match sec {
         "Keys" => v.extend(ACTS.iter().map(|(a, n, def, h)| Row::Key(*a, n, def, h))),
         "Automation" => v.push(Row::Add("approve.")),
-        "Integrations" => v.push(Row::Add("action.")),
+        "Integrations" => v.extend([Row::Add("action."), Row::Add("launch.")]),
         "Remote control" => v.insert(0, Row::Grid(Mx::Remote)),
         "Analytics" => v.insert(0, Row::Grid(Mx::Analytics)),
         "Notifications" => v.push(Row::Grid(Mx::Moshi)),
@@ -723,7 +729,7 @@ fn apply_live(d: &mut Dash, key: &str) {
         "shell.list" => d.fleet.set_shells(&d.cfg.get_or("shell.list")),
         k if k.starts_with("inbox.") => super::inbox::apply_settings(d),
         k if k.starts_with("host.") && k.ends_with(".session") => crate::chan::set_sessions(&d.cfg),
-        k if k.starts_with("key.") || k.starts_with("action.") => {
+        k if k.starts_with("key.") || k.starts_with("action.") || k.starts_with("launch.") => {
             d.keys = super::Keys::from_config(&d.cfg)
         }
         _ => {}
