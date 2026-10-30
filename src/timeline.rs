@@ -206,15 +206,12 @@ pub fn build(
         .filter(|l| !l.parent.is_empty())
         .map(|l| (l.parent.clone(), l.id.clone()))
         .collect();
-    let mut price_cache: HashMap<String, Option<prices::Price>> = HashMap::new();
+    let mut pricer = table.pricer();
     let mut price = |r: &Record| -> (f64, bool) {
         if let Some(c) = r.cost {
             return (c, false);
         }
-        let p = *price_cache
-            .entry(r.model.clone())
-            .or_insert_with(|| table.get(&r.model));
-        match p {
+        match pricer.at(&r.model, &r.effort, r.ts) {
             Some(p) => (prices::cost(&p, &r.price_tokens(), r.fast(), r.us()), true),
             None => (0.0, false),
         }

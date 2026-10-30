@@ -9,6 +9,8 @@
 //! aleph usage accounts [--json]      every account the agents were signed in to, and what each used
 //! aleph usage projects [--json]      every project (a repo, wherever it was worked on), and what each used
 //! aleph usage sources [--json]       what each machine's logs gave, and what was skipped
+//! aleph usage prices [MODEL] [--all] [--json]   each model's rate and where it came from
+//! aleph usage prices sync | accept MODEL        read the lists now; take a held change
 //! aleph usage script [--host H]      the exact script a sync sends there
 //! aleph usage sync [--host H] [--full] [--until-done] [--json]
 //! aleph usage on|off [--host H] [--agent A]
@@ -36,6 +38,7 @@ const USAGE: &str = "usage: aleph usage [24h|3d|7d|30d|6mo|all|today|this-week|t
 pub fn cmd(a: Args) -> ExitCode {
     match a.rest.first().map(String::as_str) {
         Some("sources") => sources(&a),
+        Some("prices") => super::pricescmd::cmd(&a),
         Some("accounts") => accounts_cmd(&a),
         Some("projects") => projects_cmd(&a),
         Some("script") => script(&a),

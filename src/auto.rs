@@ -271,6 +271,8 @@ pub struct Hub {
     readied: HashSet<String>,
     /// the session journal: today's file now and then, yesterday's finished
     journal: crate::journal::Writer,
+    /// the public price lists, read hourly
+    prices: crate::pricelog::Sync,
 }
 
 impl Default for Hub {
@@ -298,6 +300,7 @@ impl Hub {
             closer: Default::default(),
             readied: HashSet::new(),
             journal: Default::default(),
+            prices: Default::default(),
         }
     }
 
@@ -332,6 +335,7 @@ impl Hub {
         self.states.observe(fleet);
         self.ready_shells(cfg, fleet);
         self.journal.tick(cfg, fleet);
+        self.prices.tick(cfg);
         self.limits(cfg, fleet);
         // a question just answered: its Inbox item goes now, not in 10 s
         if trans.iter().any(|t| t.from == "blocked") {

@@ -226,7 +226,7 @@ pub(crate) fn curl_args() -> Vec<String> {
 }
 
 /// The body and status curl printed (`-w '\n%{http_code}'`).
-fn split_status(out: &str) -> (&str, u16) {
+pub(crate) fn split_status(out: &str) -> (&str, u16) {
     match out.rsplit_once('\n') {
         Some((body, code)) => (body, code.trim().parse().unwrap_or(0)),
         None => ("", out.trim().parse().unwrap_or(0)),

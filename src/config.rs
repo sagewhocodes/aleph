@@ -1462,6 +1462,12 @@ pub const KNOWN: &[Known] = &[
         help: "read the agents' own logs on every machine for tokens, models, time and cost (aleph usage) — only ids, numbers, models and folders leave a machine, never conversation text",
     },
     Known {
+        key: "analytics.prices_sync",
+        default: "true",
+        kind: Kind::Bool,
+        help: "read the public price lists hourly (OpenRouter, models.dev, LiteLLM; no login); a change applies from then on, never to past usage",
+    },
+    Known {
         key: "analytics.include",
         default: "",
         kind: Kind::Text,

@@ -58,6 +58,7 @@ pub const PATHS: &[(&str, &str)] = &[
     ("services_interval", "services.interval"),
     // analytics (aleph usage)
     ("analytics.enabled", "analytics.enabled"),
+    ("analytics.prices_sync", "analytics.prices_sync"),
     ("analytics.include", "analytics.include"),
     ("analytics.exclude", "analytics.exclude"),
     ("analytics.backfill", "analytics.backfill"),

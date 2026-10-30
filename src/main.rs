@@ -80,6 +80,7 @@ mod path;
 mod permit;
 mod pick;
 mod presets;
+mod pricelog;
 mod prices;
 mod probe;
 mod proc;
@@ -1418,7 +1419,10 @@ const DETAILS: &[(&str, &[&str])] = &[
         "  aleph usage sync [--full] [--until-done]   read now · sources: what each machine gave",
         "  aleph usage script --host H    the exact script, to read before it runs anywhere",
         "  aleph usage off [--host H] [--agent A] · on · prune [--keep 400d | --host H] [--dry-run]",
-        "Cost is what the agent reported, else an estimate (est.) from a built-in price table:",
+        "Cost is what the agent reported, else an estimate (est.) from the price lists, read hourly and",
+        "dated so a change never re-prices past usage (analytics.prices_sync):",
+        "  aleph usage prices [MODEL] [--all]   each model's rate, where it came from, what's held",
+        "  aleph usage prices sync · accept MODEL   read the lists now · take a held change",
         "  aleph settings set analytics.prices.<model> in,out[,cache write 5m,1h,cache read]  ($/MTok)",
         "The daemon (aleph watch) reads every analytics.interval seconds; analytics.max_seconds and",
         "analytics.max_mb bound each read (renice 19), analytics.backfill the first one.",

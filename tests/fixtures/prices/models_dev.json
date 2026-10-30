@@ -1,0 +1,81 @@
+{
+ "anthropic": {
+  "models": {
+   "claude-opus-5-5": {
+    "cost": {
+     "input": 4,
+     "output": 20,
+     "cache_read": 0.2,
+     "cache_write": 5
+    }
+   },
+   "claude-sonnet-5-5": {
+    "cost": {
+     "input": 2,
+     "output": 10,
+     "cache_read": 0.1,
+     "cache_write": 2.5
+    }
+   }
+  }
+ },
+ "openai": {
+  "models": {
+   "gpt-5.1": {
+    "cost": {
+     "input": 1.25,
+     "output": 10,
+     "cache_read": 0.125
+    }
+   },
+   "gpt-9": {
+    "cost": {
+     "input": 2,
+     "output": 8
+    }
+   }
+  }
+ },
+ "google": {
+  "models": {
+   "gemini-2.5-pro": {
+    "cost": {
+     "input": 1.25,
+     "output": 10,
+     "cache_read": 0.125,
+     "tiers": [
+      {
+       "input": 2.5,
+       "output": 15,
+       "cache_read": 0.25,
+       "tier": {
+        "type": "context",
+        "size": 200000
+       }
+      }
+     ]
+    }
+   }
+  }
+ },
+ "deepseek": {
+  "models": {
+   "deepseek-chat": {
+    "cost": {
+     "input": 0.28,
+     "output": 0.42
+    }
+   }
+  }
+ },
+ "fireworks-ai": {
+  "models": {
+   "gpt-5.1": {
+    "cost": {
+     "input": 30,
+     "output": 30
+    }
+   }
+  }
+ }
+}

@@ -15,8 +15,8 @@
 //! Settings: `analytics.enabled`, `analytics.include` / `analytics.exclude`
 //! (host:agent globs), `analytics.backfill` (how far back the first run
 //! reads, by file mtime), `analytics.keep` (retention), `analytics.interval`,
-//! `analytics.max_seconds` / `analytics.max_mb` (the per-run budget) and
-//! `analytics.prices.<model>`.
+//! `analytics.max_seconds` / `analytics.max_mb` (the per-run budget),
+//! `analytics.prices.<model>` and `analytics.prices_sync`.
 
 pub mod accounts;
 pub mod cmd;
@@ -26,6 +26,7 @@ pub mod extract;
 pub mod live;
 pub mod now;
 pub mod parse;
+mod pricescmd;
 pub mod projects;
 pub mod recent;
 pub mod steps;

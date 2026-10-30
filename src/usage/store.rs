@@ -821,7 +821,7 @@ pub fn build_all(
     let mut priced: HashMap<SessionKey, Vec<Priced>> = HashMap::new();
     let mut guessed: HashMap<(String, String, String), Option<String>> = HashMap::new();
     let mut prev: Option<(String, String, String, u64)> = None;
-    let mut cache: HashMap<String, Option<prices::Price>> = HashMap::new();
+    let mut pricer = table.pricer();
     for r in &reqs {
         let sk = (r.host.clone(), r.agent.clone(), r.session.clone());
         let gap = match &prev {
@@ -897,22 +897,17 @@ pub fn build_all(
                 row.free += 1;
                 (0.0, false)
             }
-            None => {
-                let pr = *cache
-                    .entry(r.model.clone())
-                    .or_insert_with(|| table.get(&r.model));
-                match pr {
-                    Some(p) => {
-                        let c = prices::cost(&p, &r.price_tokens(), r.fast(), r.us());
-                        row.cost_estimated += c;
-                        (c, true)
-                    }
-                    None => {
-                        row.unpriced += 1;
-                        (0.0, false)
-                    }
+            None => match pricer.at(&r.model, &r.effort, r.ts) {
+                Some(p) => {
+                    let c = prices::cost(&p, &r.price_tokens(), r.fast(), r.us());
+                    row.cost_estimated += c;
+                    (c, true)
                 }
-            }
+                None => {
+                    row.unpriced += 1;
+                    (0.0, false)
+                }
+            },
         };
         priced
             .entry(sk)
@@ -1000,12 +995,21 @@ const ROLLUP: &str = "r3";
 
 struct MonthRollup {
     src: u64,
+    /// what the price log held for its records when it was summed
+    dated: String,
     rows: Vec<Row>,
     prompts: Vec<Prompt>,
 }
 
+/// The latest request a month's rows hold.
+fn last_of(rows: &[Row]) -> u64 {
+    rows.iter().map(|r| r.last).max().unwrap_or(0)
+}
+
 /// The rollup rows of these months: from `rollup2.json` where it's current,
-/// rebuilt (and saved) where the records, the offset or the prices changed.
+/// rebuilt (and saved) where the records, the offset or the prices changed. A
+/// price that moved only touches the months with requests after it, and a model
+/// newly priced only the months where it had none.
 pub fn rollup(months: &[String], table: &prices::Table) -> Vec<Row> {
     summed(months, table)
         .into_iter()
@@ -1050,6 +1054,7 @@ fn summed(months: &[String], table: &prices::Table) -> Vec<MonthRollup> {
                     m.clone(),
                     MonthRollup {
                         src: gu(mv, "src"),
+                        dated: gs(mv, "dated"),
                         rows: list("rows").iter().filter_map(Row::from_json).collect(),
                         prompts: list("prompts")
                             .iter()
@@ -1063,7 +1068,14 @@ fn summed(months: &[String], table: &prices::Table) -> Vec<MonthRollup> {
     let mut changed = !same;
     for m in months {
         let size = file_size(m);
-        let fresh = have.get(m).is_some_and(|r| r.src == size);
+        let fresh = have.get(m).is_some_and(|r| {
+            r.src == size
+                && r.dated == table.dated_stamp(last_of(&r.rows))
+                && !r
+                    .rows
+                    .iter()
+                    .any(|x| x.unpriced > 0 && table.get(&x.model).is_some())
+        });
         if !fresh {
             let (rows, prompts) = if size == 0 {
                 (Vec::new(), Vec::new())
@@ -1074,6 +1086,7 @@ fn summed(months: &[String], table: &prices::Table) -> Vec<MonthRollup> {
                 m.clone(),
                 MonthRollup {
                     src: size,
+                    dated: table.dated_stamp(last_of(&rows)),
                     rows,
                     prompts,
                 },
@@ -1092,6 +1105,7 @@ fn summed(months: &[String], table: &prices::Table) -> Vec<MonthRollup> {
             ms.insert(
                 m.clone(),
                 json!({"src": r.src,
+                       "dated": r.dated,
                        "rows": r.rows.iter().map(Row::to_json).collect::<Vec<_>>(),
                        "prompts": r.prompts.iter().map(Prompt::to_json).collect::<Vec<_>>()}),
             );
@@ -1390,6 +1404,30 @@ mod tests {
         let d = dedup_on(vec![a, b, a2, other_host.clone()], &same);
         assert_eq!(d.len(), 2);
         assert!(d.contains(&other_host));
+    }
+
+    #[test]
+    fn a_request_costs_what_its_model_cost_when_it_ran() {
+        let line = |from: u64, input: f64| {
+            format!(
+                "{{\"m\":\"gpt-9\",\"from\":{from},\"p\":[{input},1,1,1,1],\"src\":\"litellm\"}}\n"
+            )
+        };
+        let moved = 1_792_400_000;
+        let log = format!("{}{}", line(0, 2.0), line(moved, 3.0));
+        let t = prices::Table::default()
+            .with_dated(std::sync::Arc::new(crate::pricelog::Dated::parse(&log)));
+        let recs = vec![
+            rec("b31", "s1", "k1", moved - 10_000, "gpt-9", 1_000_000),
+            rec("b31", "s2", "k2", moved + 10_000, "gpt-9", 1_000_000),
+        ];
+        let rows = build(recs, &t, 0);
+        let cost = |s: &str| rows.iter().find(|r| r.session == s).unwrap().cost_estimated;
+        assert!((cost("s1") - 2.0).abs() < 1e-3, "{}", cost("s1"));
+        assert!((cost("s2") - 3.0).abs() < 1e-3, "{}", cost("s2"));
+        // a month that ended before the change isn't summed again for it
+        assert_eq!(t.dated_stamp(moved - 1), "0:0");
+        assert_ne!(t.dated_stamp(moved + 1), "0:0");
     }
 
     #[test]

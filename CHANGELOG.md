@@ -9,6 +9,19 @@
   you press a key, click, or switch to that window.
 - A tile resized quickly can no longer lose its own pane to the stream it just replaced.
 
+### Prices
+- **Prices stay current, and past usage keeps the price it ran at.** The daemon reads OpenRouter's, models.dev's and
+  LiteLLM's public lists every hour, with no login sent to any of them. A change applies from when it was seen, so your
+  history never moves, and an upgrade can't re-price it either (`analytics.prices_sync`).
+- **The right price for each request:** per model, its long-prompt tier, cache rates, fast mode and effort where a list
+  prices one separately. Only a model's owner counts, not a reseller. A request routed through OpenRouter uses what
+  OpenRouter charges.
+- **A bad update can't skew your costs.** A change two lists agree on applies at once. One list alone, or a jump over 50%,
+  is held and shown on Usage until the lists agree or you accept it. Your own `analytics.prices.<model>` and the costs
+  agents report always win.
+- **`aleph usage prices`** shows each model's rates, where they came from, when they last changed and any list that
+  disagrees. `sync` reads the lists now; `accept MODEL` takes a held change.
+
 ### The tour
 - **A hands-on tour,** with chapters on Fleet, Focus and splits, the Inbox, Usage and `ctrl+k`. Each step waits for the real
   key on your real sessions, with reading cards alongside. Only the key it asks for gets through, so nothing starts, closes or

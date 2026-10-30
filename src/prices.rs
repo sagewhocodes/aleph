@@ -1,7 +1,9 @@
 //! What a request cost, estimated from token counts: a built-in price table
 //! per model (USD per million tokens), overridable per model with
 //! `analytics.prices.<model> = "input,output[,cache write 5m[,cache write 1h[,cache read]]]"`.
-//! Nothing is ever fetched; a model the table doesn't know gets no estimate.
+//! A model nothing knows gets no estimate. The table is where every model starts;
+//! [`crate::pricelog`] keeps what the public price lists said since, dated, so a
+//! request is priced as it was when it ran ([`Table::get_at`]).
 //!
 //! Sources: Anthropic's rates are from platform.claude.com/docs/en/about-claude/pricing
 //! (checked 2026-10-22). OpenAI and Google rates are their published list
@@ -9,6 +11,9 @@
 //! and every row can be overridden.
 
 use crate::config::Config;
+use crate::pricelog::Dated;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// USD per million tokens.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -283,6 +288,29 @@ fn builtin(norm: &str) -> Option<Price> {
     TABLE.iter().find(|(k, _)| *k == norm).map(|(_, p)| *p)
 }
 
+/// The built-in table: the first line of every model it knows.
+pub fn builtin_table() -> &'static [(&'static str, Price)] {
+    TABLE
+}
+
+/// A model's prices over time, oldest first: from when, and what.
+pub type History = Vec<(u64, Price)>;
+
+/// The price in effect at `ts`; before its first line, its first line.
+fn at(h: &[(u64, Price)], ts: u64) -> Option<Price> {
+    h.iter()
+        .rev()
+        .find(|(from, _)| *from <= ts)
+        .or(h.first())
+        .map(|x| x.1)
+}
+
+/// `vendor/model`: routed through something like OpenRouter (Google's own
+/// `models/…` isn't).
+fn routed(model: &str) -> bool {
+    model.contains('/') && !model.starts_with("models/") && !model.starts_with("publishers/")
+}
+
 /// `analytics.prices.<model>` values: `in,out[,cw5m[,cw1h[,cr]]]`, or named
 /// (`in=1.25 out=10 cr=0.125`). Missing cache prices follow Anthropic's
 /// structure (writes 1.25× / 2×, reads 0.1× of input).
@@ -342,8 +370,9 @@ pub fn parse_override(v: &str) -> Result<Rates, String> {
     })
 }
 
-/// Prices in effect: `analytics.prices.*` overrides, the built-in table, then
-/// OpenRouter's paid models (its model list, when Aleph keeps one).
+/// Prices in effect: `analytics.prices.*` overrides, the dated log, the built-in
+/// table, then OpenRouter's paid models (its model list, when Aleph keeps one and
+/// the log hasn't read them itself).
 #[derive(Clone, Debug, Default)]
 pub struct Table {
     overrides: Vec<(String, Rates)>,
@@ -351,6 +380,8 @@ pub struct Table {
     catalog: Vec<(String, Rates)>,
     /// when that list was read (unix s; 0: none)
     catalog_at: u64,
+    /// what the public lists said, dated
+    dated: Arc<Dated>,
 }
 
 impl Table {
@@ -362,12 +393,24 @@ impl Table {
                 Err(e) => crate::log::warn("usage", &format!("analytics.prices.{k}: {e}")),
             }
         }
-        let (catalog_at, cat) = crate::openrouter::price_catalog();
-        Table {
+        let dated = crate::pricelog::load();
+        let table = Table {
             overrides,
+            dated: dated.clone(),
             ..Table::default()
+        };
+        if dated.synced {
+            return table;
         }
-        .with_catalog(catalog_at, &cat)
+        let (catalog_at, cat) = crate::openrouter::price_catalog();
+        table.with_catalog(catalog_at, &cat)
+    }
+
+    /// With this log of what the lists said.
+    #[cfg(test)]
+    pub fn with_dated(mut self, dated: Arc<Dated>) -> Table {
+        self.dated = dated;
+        self
     }
 
     /// OpenRouter's paid models as the last resort (`openrouter::paid`).
@@ -385,28 +428,80 @@ impl Table {
         self
     }
 
-    /// A model's prices (None: unknown, so no estimate).
+    /// A model's prices now (None: unknown, so no estimate).
     pub fn get(&self, model: &str) -> Option<Price> {
+        self.get_at(model, "", u64::MAX)
+    }
+
+    /// A model's prices when a request ran, at that effort.
+    pub fn get_at(&self, model: &str, effort: &str, ts: u64) -> Option<Price> {
+        at(&self.history(model, effort)?, ts)
+    }
+
+    /// Reading many records: the same lookups, kept per model and effort.
+    pub fn pricer(&self) -> Pricer<'_> {
+        Pricer {
+            table: self,
+            kept: HashMap::new(),
+        }
+    }
+
+    /// Everything a model has cost. Effort only matters where something prices
+    /// it as a model of its own (`<model>-<effort>`).
+    pub fn history(&self, model: &str, effort: &str) -> Option<History> {
         let n = normalize(model);
-        self.exact(&n).or_else(|| {
+        let route = routed(model);
+        if !effort.is_empty() {
+            let own = format!("{n}-{}", effort.to_lowercase());
+            if let Some(h) = self.exact(&own, route) {
+                return Some(h);
+            }
+        }
+        self.exact(&n, route).or_else(|| {
             // a variant's short tag (Antigravity's `gemini-3.8-flash-n`): the model it tags
             let (base, tag) = n.rsplit_once('-')?;
             (!tag.is_empty() && tag.len() <= 2 && tag.chars().all(|c| c.is_ascii_alphabetic()))
-                .then(|| self.exact(base))
+                .then(|| self.exact(base, route))
                 .flatten()
         })
     }
 
-    fn exact(&self, n: &str) -> Option<Price> {
+    fn exact(&self, n: &str, route: bool) -> Option<History> {
         if let Some((_, r)) = self.overrides.iter().find(|(k, _)| *k == n) {
-            return Some(p(*r));
+            return Some(vec![(0, p(*r))]);
         }
-        builtin(n).or_else(|| {
-            self.catalog
-                .iter()
-                .find(|(k, _)| *k == n)
-                .map(|(_, r)| p(*r))
-        })
+        let logged = |id: &str| -> Option<History> {
+            let lines = self.dated.of(id)?;
+            Some(lines.iter().map(|l| (l.from, l.price)).collect())
+        };
+        // what OpenRouter charges, for what went through it or nothing else lists
+        let openrouter = format!("or:{n}");
+        if route {
+            if let Some(h) = logged(&openrouter) {
+                return Some(h);
+            }
+        }
+        logged(n)
+            .or_else(|| builtin(n).map(|x| vec![(0, x)]))
+            .or_else(|| logged(&openrouter))
+            .or_else(|| {
+                self.catalog
+                    .iter()
+                    .find(|(k, _)| *k == n)
+                    .map(|(_, r)| vec![(0, p(*r))])
+            })
+    }
+
+    /// Your own `analytics.prices.<model>` covers this one.
+    pub fn overridden(&self, model: &str) -> bool {
+        let n = normalize(model);
+        self.overrides.iter().any(|(k, _)| *k == n)
+    }
+
+    /// What moved a price at or before `last` (a month's last record): a month
+    /// that ended earlier isn't summed again for anything later.
+    pub fn dated_stamp(&self, last: u64) -> String {
+        self.dated.stamp_until(last)
     }
 
     /// A fingerprint of everything that changes estimates (stale rollups are rebuilt).
@@ -423,6 +518,27 @@ impl Table {
             s.push_str(&format!("|or@{}", self.catalog_at / 86_400));
         }
         s
+    }
+}
+
+/// [`Table::get_at`] with its lookups kept, for many records.
+pub struct Pricer<'a> {
+    table: &'a Table,
+    kept: HashMap<String, HashMap<String, Option<History>>>,
+}
+
+impl Pricer<'_> {
+    pub fn at(&mut self, model: &str, effort: &str, ts: u64) -> Option<Price> {
+        if let Some(h) = self.kept.get(model).and_then(|m| m.get(effort)) {
+            return at(h.as_ref()?, ts);
+        }
+        let h = self.table.history(model, effort);
+        let price = h.as_ref().and_then(|x| at(x, ts));
+        self.kept
+            .entry(model.to_string())
+            .or_default()
+            .insert(effort.to_string(), h);
+        price
     }
 }
 
@@ -524,6 +640,85 @@ mod tests {
             Table::default().stamp(),
             "estimates follow the list"
         );
+    }
+
+    fn dated(lines: &[(&str, u64, f64)]) -> Arc<Dated> {
+        let text: String = lines
+            .iter()
+            .map(|(m, from, input)| {
+                format!(
+                    "{{\"m\":\"{m}\",\"from\":{from},\"p\":[{input},1,1,1,1],\"src\":\"litellm\"}}\n"
+                )
+            })
+            .collect();
+        Arc::new(Dated::parse(&text))
+    }
+
+    #[test]
+    fn a_price_applies_only_from_when_it_was_seen() {
+        let t = Table::default().with_dated(dated(&[
+            ("gpt-9", 0, 2.0),
+            ("gpt-9", 1000, 3.0),
+            ("gpt-9", 2000, 4.0),
+        ]));
+        let input = |ts| t.get_at("gpt-9", "", ts).unwrap().base.input;
+        assert_eq!(input(500), 2.0);
+        assert_eq!(input(1000), 3.0);
+        assert_eq!(input(1999), 3.0);
+        assert_eq!(input(2500), 4.0);
+        assert_eq!(t.get("gpt-9").unwrap().base.input, 4.0, "now: the latest");
+        // the pricer says the same, however it's asked
+        let mut p = t.pricer();
+        for ts in [2500, 500, 1000] {
+            assert_eq!(p.at("gpt-9", "", ts), t.get_at("gpt-9", "", ts));
+        }
+        assert_eq!(p.at("nothing", "", 5), None);
+        assert_eq!(p.at("nothing", "", 5), None);
+    }
+
+    #[test]
+    fn an_upgrade_leaves_history_alone() {
+        // the log says what a model cost; a newer built-in table can't change that
+        let t = Table::default().with_dated(dated(&[("claude-opus-5-5", 0, 9.0)]));
+        assert_eq!(t.get("claude-opus-5-5").unwrap().base.input, 9.0);
+        // without a line for it, the table still answers
+        assert_eq!(t.get("claude-sonnet-5-5").unwrap().base.input, 2.0);
+    }
+
+    #[test]
+    fn your_price_beats_the_log() {
+        let cfg = Config::in_memory(&["analytics.prices.gpt-9=7,8"]);
+        let t = Table::from_cfg(&cfg).with_dated(dated(&[("gpt-9", 0, 2.0), ("gpt-9", 10, 3.0)]));
+        assert_eq!(t.get_at("gpt-9", "", 5).unwrap().base.input, 7.0);
+        assert_eq!(t.get_at("gpt-9", "", 50).unwrap().base.input, 7.0);
+        assert!(t.overridden("openai/gpt-9"));
+    }
+
+    #[test]
+    fn openrouter_prices_what_goes_through_it() {
+        let t = Table::default().with_dated(dated(&[
+            ("glm-4.6", 0, 1.0),
+            ("or:glm-4.6", 0, 2.0),
+            ("or:only-there", 0, 3.0),
+        ]));
+        assert_eq!(t.get("z-ai/glm-4.6").unwrap().base.input, 2.0, "routed");
+        assert_eq!(t.get("glm-4.6").unwrap().base.input, 1.0, "the owner's");
+        // nothing else lists it: better than no estimate
+        assert_eq!(t.get("only-there").unwrap().base.input, 3.0);
+        // Google's own way of writing a model isn't a route
+        let g = Table::default().with_dated(dated(&[
+            ("gemini-2.5-pro", 0, 1.0),
+            ("or:gemini-2.5-pro", 0, 2.0),
+        ]));
+        assert_eq!(g.get("models/gemini-2.5-pro").unwrap().base.input, 1.0);
+    }
+
+    #[test]
+    fn effort_counts_only_where_it_is_priced() {
+        let t = Table::default().with_dated(dated(&[("gpt-9", 0, 2.0), ("gpt-9-high", 0, 6.0)]));
+        assert_eq!(t.get_at("gpt-9", "high", 5).unwrap().base.input, 6.0);
+        assert_eq!(t.get_at("gpt-9", "low", 5).unwrap().base.input, 2.0);
+        assert_eq!(t.get_at("gpt-9", "", 5).unwrap().base.input, 2.0);
     }
 
     #[test]

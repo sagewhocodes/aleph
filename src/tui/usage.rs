@@ -457,6 +457,16 @@ pub(crate) fn reads_line(
     if failed > 0 {
         l.push(Span::styled("aleph usage sources", ui::faint()));
     }
+    let held = crate::pricelog::held_models();
+    if held > 0 {
+        l.push(Span::styled(
+            format!(
+                "⚠ {held} price change{} held: aleph usage prices  ",
+                if held == 1 { "" } else { "s" }
+            ),
+            ui::fg(c::YELLOW()),
+        ));
+    }
     // never past the edge: the last machines give way
     let mut used = 0;
     let keep = l

@@ -90,6 +90,25 @@ if [[ $cfg == *'url = "https://openrouter.ai/api/v1/'* ]]; then
     *) printf '{"error":{"code":404,"message":"Not Found"}}\n404'; exit 0;;
   esac
 fi
+# the public price lists (aleph usage prices): an ETag per fixture, 304 when it
+# was already seen; $ST/prices_v2 moves to the fixtures with changes in them,
+# $ST/prices_down_<list> makes one unreachable
+if [[ $cfg == *'url = "https://models.dev/api.json"'* || $cfg == *'url = "https://raw.githubusercontent.com/BerriAI/litellm/'* ]]; then
+  name=models_dev; [[ $cfg == *litellm* ]] && name=litellm
+  auth=no; [[ $cfg == *"Authorization: "* ]] && auth=yes
+  echo "PRICES GET $name auth=$auth" >> "${ST:?}/log"
+  [[ -f $ST/prices_down_$name ]] && { echo "curl: (7) Failed to connect" >&2; exit 7; }
+  FX="$(cd "$(dirname "$0")/../../fixtures/prices" && pwd)"
+  f=$FX/$name.json; tag=v1
+  [[ -f $ST/prices_v2 ]] && { f=$FX/${name}_v2.json; tag=v2; }
+  hdr=; prev=
+  for a in "$@"; do [[ $prev == -D ]] && hdr=$a; prev=$a; done
+  [[ -n $hdr ]] && printf 'HTTP/2 200\r\netag: "%s"\r\n\r\n' "$tag" > "$hdr"
+  if [[ $cfg == *"If-None-Match: \\\"$tag\\\""* ]]; then
+    echo "PRICES 304 $name" >> "$ST/log"; printf '\n304'; exit 0
+  fi
+  cat "$f"; printf '\n200'; exit 0
+fi
 echo "curl $* $(printf '%s' "$cfg" | tr '\n' ' ')" >> "${ST:?}/log"
 [[ " $* $cfg " == *"http://127.0.0.1:9/fail"* ]] && { echo "curl: (7) Failed to connect" >&2; exit 7; }
 if [[ $cfg == *"Content-Encoding: aes128gcm"* ]]; then

@@ -157,6 +157,7 @@ dashboard's Settings tab edits them. Per-machine settings are `host.<alias>.<key
 | Setting | TOML | Default | What it does |
 |---|---|---|---|
 | `analytics.enabled` | `analytics.enabled` | `true` (on/off) | read the agents' own logs on every machine for tokens, models, time and cost (aleph usage) — only ids, numbers, models and folders leave a machine, never conversation text |
+| `analytics.prices_sync` | `analytics.prices_sync` | `true` (on/off) | read the public price lists hourly (OpenRouter, models.dev, LiteLLM; no login); a change applies from then on, never to past usage |
 | `analytics.include` | `analytics.include` | — | host:agent globs analytics covers (empty = everything), e.g. b31:*,*:claude |
 | `analytics.exclude` | `analytics.exclude` | — | host:agent globs analytics never reads (wins over analytics.include) |
 | `analytics.backfill` | `analytics.backfill` | `90d` | how far back the first read goes, by log file age: 90d, 12w, 1y or all |

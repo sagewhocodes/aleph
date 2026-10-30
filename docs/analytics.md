@@ -14,10 +14,21 @@ aleph usage this-month --account work --agent claude,codex
 aleph usage 2026-09-01..2026-10-15 --compare
 aleph usage --stats                # cost per prompt and per session: median, p90, the costliest
 aleph usage accounts · aleph usage projects · aleph usage sources
+aleph usage prices                 # each model's rates, where they came from, what's held
 ```
 
-**Cost** is what the agent reported, else an estimate from a price table (marked *est.*; override with
+**Cost** is what the agent reported, else an estimate (marked *est.*; override with
 `analytics.prices.<model>`).
+
+**Prices** start from a table built into Aleph. Every hour the daemon reads three public lists: OpenRouter's,
+models.dev's and LiteLLM's. No login goes to any of them, and `analytics.prices_sync = false` stops it.
+
+- A change is dated and applies from when it was seen, so past usage keeps the price it ran at.
+- A change two lists agree on applies at once. One list alone, or a jump over 50%, is held and shown on Usage, until
+  the lists agree or you run `aleph usage prices accept MODEL`.
+- Only a model's owner counts, never a reseller. A request routed through OpenRouter (`vendor/model`) uses what
+  OpenRouter charges.
+- Effort only changes the price where a list prices it as its own model (`<model>-<effort>`). No list does today.
 
 **Accounts:** every request carries the login it was made on, so two Claude or Codex accounts, on one
 machine or several, each show their own cost. Name them with `analytics.account_label` (email, plan or a
