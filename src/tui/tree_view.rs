@@ -44,6 +44,8 @@ pub(crate) struct State {
     words_for: Option<Key>,
     /// the last level `v` folded to (0 sessions, 1 prompts, 2 every step)
     pub level: u8,
+    /// z or Z last asked for this (true: folded): the next conversation opens so too
+    wish: Option<bool>,
     /// the session is working now (its last prompt is still open)
     pub running: bool,
     pub mode: Option<Fold>,
@@ -138,7 +140,13 @@ pub(crate) fn pump(d: &mut Dash) {
     if let Some(rx) = &d.tv.rx {
         if let Ok((g, k, t)) = rx.try_recv() {
             if g == d.tv.gen && d.tv.key.as_ref() == Some(&k) {
+                // the first time it's read: as you last asked. After that a row
+                // you opened or closed stays that way
+                let first = d.tv.tree.is_none();
                 d.tv.tree = Some(t);
+                if first {
+                    apply_wish(d);
+                }
             }
         }
     }
@@ -480,15 +488,34 @@ pub(crate) fn draw_full(d: &mut Dash, f: &mut Frame, area: Rect) {
     f.render_widget(Paragraph::new(ui::hints_fit(&h, foot.width)), foot);
 }
 
+fn apply_wish(d: &mut Dash) {
+    match d.tv.wish {
+        Some(true) => fold_all(d),
+        Some(false) => expand_all(d),
+        None => {}
+    }
+}
+
+/// z or Z from outside the tree (Monitor › Timeline): this conversation, and the
+/// ones after it. A tree still being read is folded when it arrives.
+pub(crate) fn fold_every(d: &mut Dash, fold: bool) {
+    d.tv.wish = Some(fold);
+    if d.tv.tree.is_some() {
+        apply_wish(d);
+    }
+}
+
 /// Everything down to a line per prompt, with any compaction still showing.
-fn fold_all(d: &mut Dash) {
+pub(crate) fn fold_all(d: &mut Dash) {
+    d.tv.wish = Some(true);
     d.tv.follow = false;
     d.tv.level = 1;
     fold_to(d, 1);
 }
 
 /// Everything open, level by level.
-fn expand_all(d: &mut Dash) {
+pub(crate) fn expand_all(d: &mut Dash) {
+    d.tv.wish = Some(false);
     d.tv.level = 2;
     d.tv.toggled.insert("L".into(), true);
     for _ in 0..8 {

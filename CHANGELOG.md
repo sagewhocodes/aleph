@@ -2,6 +2,12 @@
 
 ## 2.1.0 — in progress
 
+### Keys on the timeline
+- **`G` opens the turn view on Monitor's Timeline too,** as it does everywhere else, and `z` `Z` fold or expand every
+  turn right there, without opening anything first. Your choice carries to the next conversation you move to.
+- **Capital letters work in every terminal.** A terminal that sends shift+g as `g` with shift held got the lowercase
+  key, so `G` on the timeline opened the GPU page.
+
 ### Two windows on one session
 - **The window you're using gets the pane.** herdr gives a pane one controller and one size, so a second Aleph window
   opening a session the first still held showed it clipped on the right with empty space below, and it stayed like that.

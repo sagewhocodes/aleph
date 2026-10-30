@@ -42,6 +42,8 @@ pub(crate) struct State {
     pub sel: usize,
     pub scroll: usize,
     pub hide_ended: bool,
+    /// the last draw had room for the conversation beside the list
+    beside: bool,
     /// the conversations of the last weeks (`timeline::sessions`), read off
     /// the UI thread while it's shown
     pub hist: Vec<crate::timeline::Brief>,
@@ -544,7 +546,9 @@ pub(crate) fn monitor_key(d: &mut Dash, k: KeyEvent) -> bool {
     let (from, _) = window(d);
     let n = picks(&rows(d, from)).len();
     match k.code {
-        KeyCode::Char('t') => open_turns(d, from),
+        // the turn view, as G opens it everywhere else
+        KeyCode::Char('t' | 'G') => open_turns(d, from),
+        KeyCode::Char(ch @ ('z' | 'Z')) => fold_picked(d, from, ch == 'z'),
         // [ ]: session by session, round and round
         KeyCode::Char(']') if n > 0 && super::machine_step(&k).is_none() => {
             d.tl.sel = (d.tl.sel + 1) % n
@@ -602,20 +606,45 @@ pub(crate) fn monitor_key(d: &mut Dash, k: KeyEvent) -> bool {
     true
 }
 
-/// `t`: the selected conversation's whole turn view.
-fn open_turns(d: &mut Dash, from: u64) {
+/// The selected row's conversation.
+fn picked(d: &Dash, from: u64) -> Option<(String, String, String, bool)> {
     let v = rows(d, from);
     let p = picks(&v);
     let row = p.get(d.tl.sel).and_then(|i| v.get(*i));
-    match row.and_then(|r| conversation(d, r)) {
+    row.and_then(|r| conversation(d, r))
+}
+
+const NO_CONVERSATION: &str =
+    "no conversation to show for it: its agent didn't say which (or it's not one Aleph reads)";
+
+/// `t` or `G`: the selected conversation's whole turn view.
+fn open_turns(d: &mut Dash, from: u64) {
+    match picked(d, from) {
         Some((host, agent, session, running)) => {
             let title = crate::agents::label(&agent);
             super::tree_view::open_full(d, &host, &agent, &session, running, title);
         }
-        None => d.note(
-            "no conversation to show for it: its agent didn't say which (or it's not one Aleph reads)",
-        ),
+        None => d.note(NO_CONVERSATION),
     }
+}
+
+/// `z` folds every turn, `Z` opens them: the conversation beside the list, or on
+/// a narrow screen, with no room for it, in the turn view.
+fn fold_picked(d: &mut Dash, from: u64, fold: bool) {
+    let Some((host, agent, session, running)) = picked(d, from) else {
+        d.note(NO_CONVERSATION);
+        return;
+    };
+    super::tree_view::show(d, &host, &agent, &session, running);
+    super::tree_view::fold_every(d, fold);
+    if !d.tl.beside {
+        open_turns(d, from);
+    }
+    d.note(if fold {
+        "every turn folded · Z opens them"
+    } else {
+        "every turn open · z folds them"
+    });
 }
 
 pub(crate) fn monitor_hints(_d: &Dash) -> Vec<(&'static str, &'static str)> {
@@ -623,7 +652,8 @@ pub(crate) fn monitor_hints(_d: &Dash) -> Vec<(&'static str, &'static str)> {
         ("↑↓ [ ]", "session"),
         ("ctrl+[ ]", "machine"),
         ("enter", "focus"),
-        ("t", "turn view"),
+        ("t G", "turn view"),
+        ("z Z", "fold · expand all"),
         ("+ -", "hours"),
         ("e", "ended"),
         ("←→", "view"),
@@ -645,7 +675,8 @@ pub(crate) fn draw_monitor(d: &mut Dash, f: &mut Frame, r: Rect) {
         .get(d.tl.sel)
         .and_then(|i| v.get(*i))
         .and_then(|row| conversation(d, row));
-    let (r, side) = if r.width >= 140 {
+    d.tl.beside = r.width >= 140;
+    let (r, side) = if d.tl.beside {
         let lw = r.width - (r.width * 2 / 5).clamp(60, 90);
         (
             Rect { width: lw, ..r },
@@ -913,7 +944,7 @@ fn draw_conversation(
         };
         f.render_widget(
             Paragraph::new(Span::styled(
-                "t: the turn view, with its keys · the wheel scrolls, a click folds",
+                "G: the turn view · z Z: fold or expand all · the wheel scrolls, a click folds",
                 ui::faint(),
             )),
             hint,

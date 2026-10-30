@@ -6674,10 +6674,43 @@ fn monitor_timeline_lists_earlier_conversations_and_shows_their_tree() {
     d.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(matches!(d.mode, Mode::Normal));
     assert_eq!(d.view, View::Monitor);
+    // G is the turn view too, however the terminal sends it: never the GPU page
+    render(&mut d, 200, 50);
+    for shift in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+        d.on_key(KeyEvent::new(KeyCode::Char('G'), shift));
+        assert!(matches!(d.mode, Mode::Turns), "G {shift:?}");
+        d.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    }
+    d.on_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::SHIFT));
+    assert!(
+        matches!(d.mode, Mode::Turns),
+        "shift+g sent as g with shift"
+    );
+    assert_eq!(d.mon.sub, monitor_draw::Sub::Timeline);
+    d.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    // z and Z work on the conversation beside the list, without opening anything
+    d.on_key(KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::NONE));
+    assert!(matches!(d.mode, Mode::Normal));
+    let s = render(&mut d, 200, 50);
+    assert_eq!(s.matches("› Read").count(), 4, "all open: {s}");
+    d.on_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+    let s = render(&mut d, 200, 50);
+    assert!(s.contains("▸ prompt 1 · you"), "folded: {s}");
+    assert_eq!(s.matches("› Read").count(), 0, "folded: {s}");
+    // plain g still goes to the GPU page
+    d.on_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    assert_eq!(d.mon.sub, monitor_draw::Sub::Gpu);
+    d.mon.sub = monitor_draw::Sub::Timeline;
     // narrow: the list alone, the whole turn view on t
     let s = render(&mut d, 120, 32);
     assert!(!s.contains("Conversation ·"), "{s}");
     d.on_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
     let s = render(&mut d, 120, 32);
     assert!(s.contains("Turns") && !s.contains("earlier ·"), "{s}");
+    d.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    // and z, with no room to show it, opens it folded
+    d.on_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+    assert!(matches!(d.mode, Mode::Turns));
+    let s = render(&mut d, 120, 32);
+    assert!(s.contains("▸ prompt 1 · you"), "{s}");
 }

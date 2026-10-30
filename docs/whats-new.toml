@@ -10,6 +10,22 @@
 # only a build with that feature carries them.
 
 [[entry]]
+id = "2.1.0-prices"
+date = "2026-10-31"
+title = "Prices that stay current, and a fix for two windows"
+notes = [
+  "Prices now come from OpenRouter, models.dev and LiteLLM, read every hour with no login. Past usage keeps the price it ran at.",
+  "A change only one list reports, or a jump over 50%, waits for you: aleph usage prices shows it, accept takes it.",
+  "Two Aleph windows on one session: the window you're using gets the pane and fills the screen. The other says view only until you press a key there.",
+  "On Monitor's Timeline, G opens the turn view, and z and Z fold or expand every turn right there.",
+]
+commits = [
+  "The window you're using gets the pane",
+  "Prices from three public lists, dated, with a guard",
+  "G and z Z work on Monitor's Timeline",
+]
+
+[[entry]]
 id = "2.1.0-ctrlk"
 date = "2026-10-31"
 title = "ctrl+k rebuilt, a prompt library, a turn view, a tour"

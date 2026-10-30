@@ -1304,6 +1304,7 @@ impl Dash {
 
     /// A key, and what it asks for (past showcase mode's gate).
     fn on_key(&mut self, k: KeyEvent) -> Option<Handoff> {
+        let k = capital(k);
         wall::take_back(self);
         // showcase: the panic key pauses (and resumes) every window, before
         // anything else sees it; while paused no other key does anything
@@ -3436,6 +3437,17 @@ pub(crate) fn machine_step(k: &KeyEvent) -> Option<bool> {
         KeyCode::Char('(') => Some(false),
         _ => None,
     }
+}
+
+/// A terminal on the kitty keyboard protocol can send shift+g as `g` with shift
+/// held, which every key below would take for plain `g`: it's `G`.
+fn capital(mut k: KeyEvent) -> KeyEvent {
+    if let KeyCode::Char(c) = k.code {
+        if k.modifiers.contains(KeyModifiers::SHIFT) && c.is_ascii_lowercase() {
+            k.code = KeyCode::Char(c.to_ascii_uppercase());
+        }
+    }
+    k
 }
 
 pub(crate) fn key_str(k: &KeyEvent) -> String {
