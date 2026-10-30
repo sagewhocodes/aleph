@@ -94,8 +94,10 @@ case "$1 $2" in
   "tab rename") updt --arg t "$3" --arg l "$4" '(.result.tabs[] | select(.tab_id==$t)).label = $l'; ok;;
   # $ST/busy_<pane>: something other than its shell runs there
   "pane process-info")
-    fg=4242; [[ -f $ST/busy_${4//:/_} ]] && fg=4343
-    echo "{\"result\":{\"type\":\"pane_process_info\",\"process_info\":{\"pane_id\":\"$4\",\"shell_pid\":4242,\"foreground_process_group_id\":$fg,\"foreground_processes\":[]}}}";;
+    # $ST/busy_<pane> names what's running in it (its text is the command line)
+    fg=4242; procs='[]'
+    if [[ -f $ST/busy_${4//:/_} ]]; then fg=4343; procs=$(jq -nc --arg c "$(cat "$ST/busy_${4//:/_}")" '[{pid:4343,cmdline:$c}]'); fi
+    echo "{\"result\":{\"type\":\"pane_process_info\",\"process_info\":{\"pane_id\":\"$4\",\"shell_pid\":4242,\"foreground_process_group_id\":$fg,\"foreground_processes\":$procs}}}";;
   "pane close") upd --arg p "$3" '.result.agents |= map(select(.pane_id != $p))'; ok;;
   "pane report-metadata") ok;;
   "agent send-keys"|"agent focus") noagent "$3"; ok;;

@@ -10,6 +10,27 @@
 # only a build with that feature carries them.
 
 [[entry]]
+id = "2.1.0-terminal"
+date = "2026-10-30"
+title = "Select and copy in any tile, free splits, terminals always ready"
+notes = [
+  "Drag across any tile to select its text; it's copied when you let go. Clicks still reach the agent, and option+drag goes to it.",
+  "Splits are free: v and s put any machine's session, a new agent or a terminal in a pane. Your arrangement stays, w comes back to it, and alt+arrows move between panes while typing.",
+  "L locks a layout, z maximises a tile and back, and space no longer loses what you arranged by hand.",
+  "Every plain terminal herdr has is listed, and each machine has a standing one: ! opens it, or the one already in a session's folder. shell.ready = startup makes them as soon as a machine answers.",
+  "A terminal running a command shows it, its timeline lists what it ran, and a long command notifies when it finishes (notify.commands). It says finished, not failed: herdr gives no exit code.",
+  "ctrl+q in Fleet no longer quits; plain q does.",
+]
+commits = [
+  "Drag across any tile to select its text; it's copied when you let go",
+  "L locks a layout, z says it's maximised, space keeps your own arrangement",
+  "Free splits: any machine's session or a terminal in any pane, and they stay",
+  "Every plain terminal is listed, and each machine has one standing ready",
+  "! opens a terminal in a session's folder from Focus and Tile too",
+  "A terminal's commands show on its row and timeline, and a long one notifies when it ends",
+]
+
+[[entry]]
 id = "2.1.0-keys"
 date = "2026-10-30"
 title = "Keys that changed: ctrl+q, [ ] and Tab"

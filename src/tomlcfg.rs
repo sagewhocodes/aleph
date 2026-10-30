@@ -153,6 +153,7 @@ pub const PATHS: &[(&str, &str)] = &[
     ("notify.remote_on", "notify.remote_on"),
     ("notify.done_min", "notify.done_min"),
     ("notify.subagents", "notify.subagents"),
+    ("notify.commands", "notify.commands"),
     ("notify.question_after", "notify.question_after"),
     ("notify.dnd", "notify.dnd"),
     ("notify.source", "notify.source"),

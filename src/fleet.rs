@@ -318,12 +318,19 @@ enum Msg {
         read: Vec<String>,
         found: Vec<String>,
     },
+    /// a command scan: each shell's foreground (a command, or its prompt)
+    Commands {
+        alias: String,
+        seen: HashMap<String, Option<String>>,
+    },
 }
 
 /// How often idle sessions' screens are read for usage limits.
 const LIMIT_SCAN: Duration = Duration::from_secs(30);
 /// How often working sessions' screens are read for a compaction (they last
 /// from seconds to a few minutes; a short one missed only goes unlabelled).
+/// How often shells are asked what's in their foreground.
+const COMMAND_SCAN: Duration = Duration::from_secs(3);
 const COMPACT_SCAN: Duration = Duration::from_secs(8);
 
 /// This computer's herdr version, asked once per run.
@@ -540,6 +547,13 @@ pub struct Fleet {
     compacted: HashMap<String, u64>,
     /// per machine: the last compaction scan, and whether one is running
     compact_scan: HashMap<String, (Instant, bool)>,
+    /// the commands shells are running now (`Session::key`), what ended and
+    /// hasn't been polled yet, and what each ran while this was watching: held
+    /// here only, never written
+    commands: HashMap<String, Ran>,
+    ended: HashMap<String, Ran>,
+    ran: HashMap<String, std::collections::VecDeque<Ran>>,
+    command_scan: HashMap<String, (Instant, bool)>,
 }
 
 /// How long to wait before polling `h` again: the refresh interval while it
@@ -652,6 +666,99 @@ fn note_compaction(
     }
 }
 
+/// A command a shell ran.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ran {
+    pub cmd: String,
+    pub from: u64,
+    /// when it ended; None while it's running
+    pub to: Option<u64>,
+}
+
+/// How many of a shell's past commands are held.
+const RAN_KEPT: usize = 30;
+
+/// Things you leave running and end yourself: their end isn't news.
+const INTERACTIVE: &[&str] = &[
+    "vim", "nvim", "vi", "nano", "emacs", "less", "more", "man", "top", "htop", "btop", "atop",
+    "nvtop", "tmux", "screen", "ssh", "mosh", "sftp", "lazygit", "tig", "fzf", "ranger", "yazi",
+    "watch", "claude", "codex", "opencode",
+];
+
+/// A shell's foreground as a scan saw it: a command started, went on or ended.
+fn note_foreground(
+    key: &str,
+    fg: Option<String>,
+    t: u64,
+    commands: &mut HashMap<String, Ran>,
+    ended: &mut HashMap<String, Ran>,
+    ran: &mut HashMap<String, std::collections::VecDeque<Ran>>,
+) {
+    if commands.get(key).map(|r| &r.cmd) == fg.as_ref() {
+        return;
+    }
+    if let Some(mut r) = commands.remove(key) {
+        r.to = Some(t);
+        let past = ran.entry(key.to_string()).or_default();
+        past.push_back(r.clone());
+        if past.len() > RAN_KEPT {
+            past.pop_front();
+        }
+        ended.insert(key.to_string(), r);
+    }
+    if let Some(cmd) = fg {
+        commands.insert(
+            key.to_string(),
+            Ran {
+                cmd,
+                from: t,
+                to: None,
+            },
+        );
+    }
+}
+
+/// Is a command's end worth telling you about (`notify.commands`: how long it has
+/// to have run)?
+fn worth_telling(r: &Ran, min_secs: u64) -> bool {
+    let word = r.cmd.split_whitespace().next().unwrap_or("");
+    let word = word.rsplit('/').next().unwrap_or(word);
+    let took = r.to.unwrap_or(r.from).saturating_sub(r.from);
+    min_secs > 0 && took >= min_secs && !INTERACTIVE.contains(&word)
+}
+
+/// A shell in a poll: working while a command runs, named for it. Its end goes the
+/// way an agent's turn does, to the Inbox and every notification, unless it isn't
+/// worth telling. `was_working`: the last poll said so, maybe before a restart. Until
+/// a scan has answered that's still the best word, and a command that ended unseen
+/// meanwhile is no news.
+fn note_command(
+    s: &mut Session,
+    commands: &HashMap<String, Ran>,
+    ended: &mut HashMap<String, Ran>,
+    (was_working, scanned): (bool, bool),
+    min_secs: impl Fn() -> u64,
+) {
+    if s.agent != crate::agents::SHELL {
+        return;
+    }
+    let k = s.key();
+    if let Some(r) = commands.get(&k) {
+        s.status = "working".into();
+        s.title = r.cmd.clone();
+        return;
+    }
+    if let Some(r) = ended.remove(&k) {
+        // (a quiet end is told to nobody, as a compaction's isn't)
+        s.compacted = !worth_telling(&r, min_secs());
+        s.title = r.cmd;
+    } else if was_working && scanned {
+        s.compacted = true;
+    } else if was_working {
+        s.status = "working".into();
+    }
+}
+
 impl Fleet {
     /// The machines this computer can't reach. A machine that answers with no
     /// herdr running isn't one of them: its agents' logs can still be read.
@@ -699,6 +806,10 @@ impl Fleet {
             compacting: Default::default(),
             compacted: HashMap::new(),
             compact_scan: HashMap::new(),
+            commands: HashMap::new(),
+            ended: HashMap::new(),
+            ran: HashMap::new(),
+            command_scan: HashMap::new(),
         };
         for a in aliases {
             f.add_host(cfg, &a);
@@ -741,6 +852,10 @@ impl Fleet {
             compacting: Default::default(),
             compacted: HashMap::new(),
             compact_scan: HashMap::new(),
+            commands: HashMap::new(),
+            ended: HashMap::new(),
+            ran: HashMap::new(),
+            command_scan: HashMap::new(),
         }
     }
 
@@ -1073,6 +1188,21 @@ impl Fleet {
                         h.herdr_info = Some(info);
                     }
                 }
+                Msg::Commands { alias, seen } => {
+                    self.command_scan
+                        .insert(alias.clone(), (Instant::now(), false));
+                    let t = now();
+                    for (pane, fg) in seen {
+                        note_foreground(
+                            &format!("{alias}|{pane}"),
+                            fg,
+                            t,
+                            &mut self.commands,
+                            &mut self.ended,
+                            &mut self.ran,
+                        );
+                    }
+                }
                 Msg::Compacting { alias, read, found } => {
                     self.compact_scan
                         .insert(alias.clone(), (Instant::now(), false));
@@ -1169,6 +1299,7 @@ impl Fleet {
         if self.scan_limits {
             self.scan_for_limits();
             self.scan_for_compaction();
+            self.scan_for_commands();
         }
         out
     }
@@ -1221,6 +1352,45 @@ impl Fleet {
 
     /// Every `COMPACT_SCAN`, read the end of each machine's working agents'
     /// screens (one ssh call per machine): which are compacting?
+    /// Every `COMMAND_SCAN`, what each machine's shells have in the foreground.
+    fn scan_for_commands(&mut self) {
+        for h in &self.hosts {
+            if h.conn != Conn::Up || h.stale || h.paused {
+                continue;
+            }
+            let due = self
+                .command_scan
+                .get(&h.alias)
+                .is_none_or(|(t, running)| !running && t.elapsed() >= COMMAND_SCAN);
+            let panes: Vec<String> = h
+                .sessions
+                .iter()
+                .filter(|s| s.agent == crate::agents::SHELL)
+                .map(|s| s.pane_id.clone())
+                .collect();
+            if !due || panes.is_empty() {
+                continue;
+            }
+            self.command_scan
+                .insert(h.alias.clone(), (Instant::now(), true));
+            let (t, tx, alias) = (h.target.clone(), self.tx.clone(), h.alias.clone());
+            thread::spawn(move || {
+                let seen = Herdr::new(&t).foreground_many(&panes);
+                let _ = tx.send(Msg::Commands { alias, seen });
+            });
+        }
+    }
+
+    /// What a shell has run while this was watching, newest first; the first one
+    /// with no end is still running.
+    pub fn commands_of(&self, key: &str) -> Vec<Ran> {
+        let mut v: Vec<Ran> = self.commands.get(key).cloned().into_iter().collect();
+        if let Some(r) = self.ran.get(key) {
+            v.extend(r.iter().rev().cloned());
+        }
+        v
+    }
+
     fn scan_for_compaction(&mut self) {
         for h in &self.hosts {
             if h.conn != Conn::Up {
@@ -1280,6 +1450,19 @@ impl Fleet {
                     s.host = alias.to_string();
                     let k = s.key();
                     note_compaction(s, &mut self.compacting, &mut self.compacted);
+                    let was_working = since
+                        .get(&k)
+                        .is_some_and(|(st, _)| st.split('#').next() == Some("working"));
+                    // (a fleet that doesn't scan, as a one-off `aleph ls`, won't hear more)
+                    let scanned = !self.scan_limits
+                        || self.command_scan.get(alias).is_some_and(|(_, busy)| !busy);
+                    note_command(
+                        s,
+                        &self.commands,
+                        &mut self.ended,
+                        (was_working, scanned),
+                        || Config::load().num("notify.commands"),
+                    );
                     match self.limits.get(&k) {
                         Some((st, r)) if *st == s.status => s.limit = Some(r.clone()),
                         Some(_) => {
@@ -1614,6 +1797,140 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_shells_command_shows_as_working_and_a_long_one_tells_you_it_ended() {
+        let (mut on, mut ended, mut ran) = (HashMap::new(), HashMap::new(), HashMap::new());
+        let k = "b31|w1:p7";
+        let poll = |on: &HashMap<String, Ran>, ended: &mut HashMap<String, Ran>, min: u64| {
+            let mut s = Session {
+                host: "b31".into(),
+                pane_id: "w1:p7".into(),
+                agent: crate::agents::SHELL.into(),
+                status: "idle".into(),
+                ..Default::default()
+            };
+            note_command(&mut s, on, ended, (false, true), || min);
+            s
+        };
+        // at its prompt: nothing
+        let s = poll(&on, &mut ended, 30);
+        assert!(s.status == "idle" && s.title.is_empty() && !s.compacted);
+        // a command: working, named for it, and it keeps its start while it runs
+        note_foreground(
+            k,
+            Some("cargo build".into()),
+            100,
+            &mut on,
+            &mut ended,
+            &mut ran,
+        );
+        note_foreground(
+            k,
+            Some("cargo build".into()),
+            103,
+            &mut on,
+            &mut ended,
+            &mut ran,
+        );
+        assert_eq!(on[k].from, 100);
+        let s = poll(&on, &mut ended, 30);
+        assert_eq!(
+            (s.status.as_str(), s.title.as_str()),
+            ("working", "cargo build")
+        );
+        // it ends: the poll that says so names it, and a turn's Done goes out
+        note_foreground(k, None, 200, &mut on, &mut ended, &mut ran);
+        let s = poll(&on, &mut ended, 30);
+        assert_eq!(
+            (s.status.as_str(), s.title.as_str()),
+            ("idle", "cargo build")
+        );
+        assert!(!s.compacted, "worth telling");
+        let tr = Transition {
+            session: s,
+            from: "working".into(),
+            took: 100,
+        };
+        let e = crate::events::from_poll("b31", 200, &[tr], &[], &[]);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].kind, crate::events::Kind::Done);
+        assert_eq!(e[0].title, "cargo build");
+        // the next poll is an ordinary one
+        assert!(poll(&on, &mut ended, 30).title.is_empty());
+        // too short, or something you left running: no news
+        for (cmd, secs, min) in [
+            ("make", 10, 30),
+            ("vim notes.md", 900, 30),
+            ("/usr/bin/ssh gpu2", 900, 30),
+            ("make", 900, 0),
+        ] {
+            note_foreground(k, Some(cmd.into()), 1000, &mut on, &mut ended, &mut ran);
+            note_foreground(k, None, 1000 + secs, &mut on, &mut ended, &mut ran);
+            let s = poll(&on, &mut ended, min);
+            assert!(s.compacted, "{cmd}");
+            let tr = Transition {
+                session: s,
+                from: "working".into(),
+                took: secs,
+            };
+            assert!(crate::events::from_poll("b31", 1, &[tr], &[], &[]).is_empty());
+        }
+        // one after another with no prompt seen between: the first has ended
+        note_foreground(k, Some("a".into()), 1, &mut on, &mut ended, &mut ran);
+        note_foreground(k, Some("b".into()), 2, &mut on, &mut ended, &mut ran);
+        assert_eq!(on[k].cmd, "b");
+        assert_eq!(ended[k].cmd, "a");
+        // held in memory only, and only so many
+        for i in 0..100 {
+            note_foreground(k, Some(i.to_string()), i, &mut on, &mut ended, &mut ran);
+        }
+        assert_eq!(ran[k].len(), RAN_KEPT);
+        // an agent is never touched
+        let mut a = Session {
+            host: "b31".into(),
+            pane_id: "w1:p7".into(),
+            agent: "claude".into(),
+            status: "idle".into(),
+            ..Default::default()
+        };
+        note_command(&mut a, &on, &mut ended, (true, false), || 30);
+        assert_eq!(a.status, "idle");
+    }
+
+    /// A dashboard restarted while a command runs: no false "finished" in the gap
+    /// before its first scan, and a command that ended unseen says nothing.
+    #[test]
+    fn a_restart_while_a_command_runs_is_no_news() {
+        let shell = || Session {
+            host: "b31".into(),
+            pane_id: "w1:p7".into(),
+            agent: crate::agents::SHELL.into(),
+            status: "idle".into(),
+            ..Default::default()
+        };
+        let (on, mut ended) = (HashMap::new(), HashMap::new());
+        // the last poll said working, no scan has answered yet: it still is
+        let mut s = shell();
+        note_command(&mut s, &on, &mut ended, (true, false), || 30);
+        assert_eq!(s.status, "working");
+        assert!(!s.compacted);
+        // the scan says its prompt: at rest, and nobody's told
+        let mut s = shell();
+        note_command(&mut s, &on, &mut ended, (true, true), || 30);
+        assert_eq!(s.status, "idle");
+        assert!(s.compacted);
+        let tr = Transition {
+            session: s,
+            from: "working".into(),
+            took: 12,
+        };
+        assert!(crate::events::from_poll("b31", 1, &[tr], &[], &[]).is_empty());
+        // never working: nothing at all
+        let mut s = shell();
+        note_command(&mut s, &on, &mut ended, (false, false), || 30);
+        assert!(s.status == "idle" && !s.compacted);
+    }
+
+    #[test]
     fn watch_matches_land_in_the_inbox_once() {
         let mut f = Fleet::placeholder();
         let e = crate::listen::Ev {
@@ -1769,6 +2086,10 @@ mod tests {
             compacting: Default::default(),
             compacted: HashMap::new(),
             compact_scan: HashMap::new(),
+            commands: HashMap::new(),
+            ended: HashMap::new(),
+            ran: HashMap::new(),
+            command_scan: HashMap::new(),
         };
         f.hosts.push(Host {
             alias: alias.into(),

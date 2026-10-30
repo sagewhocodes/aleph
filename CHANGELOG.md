@@ -28,6 +28,11 @@
   opens the terminal already in that folder if there is one. `shell.ready = startup` makes each machine's as soon as it
   answers.
 - `!` works in Focus and Tile too, and shows in their hints, Fleet's and `ctrl+k`.
+- **A terminal running a command shows as working, named for it,** and its timeline lists what it ran, long ones cut off,
+  with how long each took. Commands are kept in memory only.
+- **A long command notifies when it finishes** (`notify.commands`, 30 seconds; 0 turns it off), through the Inbox and every
+  notification you've set up. Things you leave running and end yourself, such as vim or ssh, never do. herdr gives no exit
+  code, so it says finished, not failed.
 - A pane herdr couldn't bring back after a restart says why on its row.
 - `ctrl+q` in Fleet no longer quits Aleph: one press too many while backing out of Focus would have closed it. Plain `q`
   still does.

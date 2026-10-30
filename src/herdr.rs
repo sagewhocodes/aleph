@@ -991,6 +991,49 @@ impl Herdr {
         Ok(prompt_in(&v))
     }
 
+    /// What each pane has in the foreground, in one round trip: a command, or
+    /// `None` at its shell's prompt. A pane herdr didn't answer for is left out.
+    pub fn foreground_many(&self, panes: &[String]) -> HashMap<String, Option<String>> {
+        const MARK: &str = "@@CCH-PANE ";
+        let mut out = HashMap::new();
+        if panes.is_empty() || crate::showcase::demo() {
+            return out;
+        }
+        if self.via_ssh() || crate::sshcfg::is_local(&self.ssh) {
+            let herdr = if crate::sshcfg::is_local(&self.ssh) {
+                sh_quote(&bin())
+            } else {
+                sh_quote(&crate::chan::herdr_path(&self.ssh))
+            };
+            let list: Vec<String> = panes.iter().map(|p| sh_quote(p)).collect();
+            let line = format!(
+                "{}for p in {}; do printf '\\n{MARK}%s\\n' \"$p\"; {herdr} pane process-info --pane \"$p\" 2>/dev/null; done",
+                crate::chan::herdr_env(&self.ssh),
+                list.join(" ")
+            );
+            let Ok(o) = proc::run(&mut crate::sshcfg::shell(&self.ssh, &line), T_CALL, None) else {
+                return out;
+            };
+            let text = o.text();
+            for chunk in text.split(MARK).skip(1) {
+                let (pane, body) = chunk.split_once('\n').unwrap_or((chunk, ""));
+                let v: Value = serde_json::from_str(body.trim()).unwrap_or(Value::Null);
+                if let Some(fg) = foreground_of(&v) {
+                    out.insert(pane.trim().to_string(), fg);
+                }
+            }
+            return out;
+        }
+        for p in panes {
+            if let Ok(v) = self.call_s(&["pane", "process-info", "--pane", p]) {
+                if let Some(fg) = foreground_of(&v) {
+                    out.insert(p.clone(), fg);
+                }
+            }
+        }
+        out
+    }
+
     pub fn close_pane(&self, pane: &str) -> Result<(), String> {
         if let Some(r) = crate::showcase::close(&self.ssh, pane) {
             return r;
@@ -1955,6 +1998,43 @@ fn split_args(
 
 /// `pane process-info`'s answer: the shell itself in the foreground? Anything
 /// unclear is no.
+/// What `pane process-info` says is in the foreground: `Some(None)` at the
+/// shell's prompt, `Some(Some(command))` otherwise (its command line, secrets
+/// masked), `None` when it doesn't say.
+fn foreground_of(v: &Value) -> Option<Option<String>> {
+    let info = &v["result"]["process_info"];
+    let fg = info["foreground_process_group_id"].as_u64()?;
+    if Some(fg) == info["shell_pid"].as_u64() {
+        return Some(None);
+    }
+    // the group's leader, else the first of it
+    let procs = info["foreground_processes"].as_array();
+    let p = procs.and_then(|v| {
+        v.iter()
+            .find(|p| p["pid"].as_u64() == Some(fg))
+            .or_else(|| v.first())
+    });
+    let text = p
+        .and_then(|p| {
+            p["cmdline"]
+                .as_str()
+                .filter(|c| !c.trim().is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    let argv: Vec<&str> = p["argv"]
+                        .as_array()?
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect();
+                    (!argv.is_empty()).then(|| argv.join(" "))
+                })
+                .or_else(|| p["name"].as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| "a command".to_string());
+    let text = crate::sentlog::scrub(crate::log::mask_known(text.trim()).as_ref());
+    Some(Some(text.chars().take(240).collect()))
+}
+
 fn prompt_in(v: &Value) -> bool {
     let info = &v["result"]["process_info"];
     let (fg, shell) = (
@@ -2509,6 +2589,54 @@ mod tests {
             ("frosting-crane", "frosting-crane")
         );
         assert_eq!(sh.cwd, "/srv/px/src");
+    }
+
+    #[test]
+    fn a_panes_foreground_is_its_command_or_nothing() {
+        let info = |fg: u64, procs: Value| {
+            json!({"result": {"process_info": {
+                "foreground_process_group_id": fg, "shell_pid": 10, "foreground_processes": procs
+            }}})
+        };
+        assert_eq!(
+            foreground_of(&info(10, json!([]))),
+            Some(None),
+            "its prompt"
+        );
+        assert_eq!(foreground_of(&json!({"result": {}})), None, "says nothing");
+        // the group's leader, by its command line
+        let v = info(
+            20,
+            json!([
+                {"pid": 21, "cmdline": "rustc --edition"},
+                {"pid": 20, "cmdline": "cargo build --release"}
+            ]),
+        );
+        assert_eq!(
+            foreground_of(&v),
+            Some(Some("cargo build --release".into()))
+        );
+        // no command line: its argv, then its name, then that something runs
+        let v = info(20, json!([{"pid": 20, "argv": ["sleep", "60"]}]));
+        assert_eq!(foreground_of(&v), Some(Some("sleep 60".into())));
+        let v = info(20, json!([{"pid": 20, "name": "node"}]));
+        assert_eq!(foreground_of(&v), Some(Some("node".into())));
+        assert_eq!(
+            foreground_of(&info(20, json!([]))),
+            Some(Some("a command".into()))
+        );
+        // long ones stop, and a key on the command line never gets further
+        let v = info(20, json!([{"pid": 20, "cmdline": "x".repeat(500)}]));
+        assert_eq!(foreground_of(&v).flatten().unwrap().chars().count(), 240);
+        crate::log::mask("not-a-real-secret-value");
+        let v = info(
+            20,
+            json!([{"pid": 20, "cmdline": "deploy --token not-a-real-secret-value"}]),
+        );
+        assert!(!foreground_of(&v)
+            .flatten()
+            .unwrap()
+            .contains("not-a-real-secret-value"));
     }
 
     #[test]

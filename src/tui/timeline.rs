@@ -86,6 +86,33 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect, s: &Session) {
             ui::faint(),
         )));
     }
+    // a terminal: the commands it ran while this has been watching, newest first
+    let ran = d.fleet.commands_of(&s.key());
+    if !ran.is_empty() {
+        mid.push(Line::from(Span::styled("commands", ui::faint())));
+    }
+    for r in ran.iter().take(12) {
+        let (g, col, took) = match r.to {
+            None => (
+                ui::spinner(d.t0).to_string(),
+                c::WORKING(),
+                ui::dur(crate::cache::now().saturating_sub(r.from)),
+            ),
+            Some(to) => (
+                "✓".to_string(),
+                c::DONE(),
+                ui::dur(to.saturating_sub(r.from)),
+            ),
+        };
+        // the end of a long one is cut, its time always shown
+        let tail = format!("  {took}");
+        let room = w.saturating_sub(2 + ui::width(&tail));
+        mid.push(Line::from(vec![
+            Span::styled(format!("{g} "), ui::fg(col).add_modifier(Modifier::BOLD)),
+            Span::styled(ui::trunc(&r.cmd, room), ui::muted()),
+            Span::styled(tail, ui::faint()),
+        ]));
+    }
     // at the top: its states over the last hours
     let mut top: Vec<Line> = Vec::new();
     if inner.height >= 12 && super::timechart::has_any(d, s) {
@@ -148,7 +175,7 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect, s: &Session) {
             )));
         }
     }
-    if story.is_empty() {
+    if story.is_empty() && ran.is_empty() {
         for l in ui::wrap("nothing yet: its changes show up here as they happen", w) {
             story.push(Line::from(Span::styled(l, ui::faint())));
         }

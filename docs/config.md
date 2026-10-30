@@ -118,6 +118,7 @@ dashboard's Settings tab edits them. Per-machine settings are `host.<alias>.<key
 |---|---|---|---|
 | `notify` | `notify.desktop` | `true` (on/off) | aleph watch: notify when a session needs you |
 | `notify.subagents` | `notify.subagents` | `false` (on/off) | notify when an agent wakes because a subagent reported back while others still work; off, only the last report counts as the session finishing |
+| `notify.commands` | `notify.commands` | `30` (number) | a command in a terminal that ran this many seconds notifies when it finishes (0: never). Things you leave running and end yourself, such as vim, ssh or htop, never do. herdr gives no exit code, so it says finished, not failed |
 | `notify_done` | `notify.desktop_done` | `false` (on/off) | desktop notifications for every finished turn, not only the long ones (notify.done_min); never for a session on screen in a dashboard in front of you |
 | `notify.ntfy` | `notify.ntfy` | — | phone notifications: an ntfy topic URL, e.g. https://ntfy.sh/<secret-topic> |
 | `notify.slack` | `notify.slack` | — | a Slack incoming-webhook URL |

@@ -522,6 +522,12 @@ pub const KNOWN: &[Known] = &[
         help: "notify when an agent wakes because a subagent reported back while others still work; off, only the last report counts as the session finishing",
     },
     Known {
+        key: "notify.commands",
+        default: "30",
+        kind: Kind::Num,
+        help: "a command in a terminal that ran this many seconds notifies when it finishes (0: never). Things you leave running and end yourself, such as vim, ssh or htop, never do. herdr gives no exit code, so it says finished, not failed",
+    },
+    Known {
         key: "notify_done",
         default: "false",
         kind: Kind::Bool,
