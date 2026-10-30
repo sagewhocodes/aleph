@@ -809,18 +809,25 @@ impl Dash {
     }
 
     /// Keep one stats stream per host that should have one (`stats` setting),
-    /// and none while another view is up.
+    /// and none while another view is up, unless there's no daemon to keep the
+    /// graphs' history: then this is the only one who can.
     fn sync_telemetry(&mut self) {
+        let hosts: Vec<String> = self.fleet.hosts.iter().map(|h| h.alias.clone()).collect();
+        crate::statshist::read_logs(&self.cfg, &hosts);
         let want: Vec<String> = if self.view == View::Monitor {
             // the Monitor compares every machine
-            self.fleet.hosts.iter().map(|h| h.alias.clone()).collect()
+            hosts
         } else if !matches!(self.view, View::Fleet) {
-            vec![]
+            if self.owner.0 && self.cfg.get_or("stats") != "off" {
+                hosts
+            } else {
+                vec![]
+            }
         } else {
             match self.cfg.get_or("stats").as_str() {
                 "off" => vec![],
                 "selected" => self.fv.selected_host(self).into_iter().collect(),
-                _ => self.fleet.hosts.iter().map(|h| h.alias.clone()).collect(),
+                _ => hosts,
             }
         };
         self.tele.retain(|a, _| want.contains(a));
@@ -921,6 +928,12 @@ impl Dash {
 
     pub(crate) fn stats(&self, host: &str) -> Option<crate::telemetry::Stats> {
         let mut st = self.tele.get(host).map(Telemetry::snapshot)?;
+        crate::statshist::apply(
+            host,
+            &mut st,
+            crate::statshist::scale_secs(&self.cfg.get_or("stats_window")),
+            crate::cache::now(),
+        );
         // whose each GPU process is: the session in its folder
         if let Some(h) = self.fleet.host(host).filter(|_| !st.gpu_procs.is_empty()) {
             for p in st.gpu_procs.iter_mut() {

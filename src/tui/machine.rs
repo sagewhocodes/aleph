@@ -84,8 +84,10 @@ fn stats_note(h: &[f64], now: f64) -> String {
     if h.is_empty() {
         return String::new();
     }
-    let avg = h.iter().sum::<f64>() / h.len() as f64;
-    let peak = h.iter().cloned().fold(0.0, f64::max);
+    // a gap (nothing was read then) isn't a zero
+    let read: Vec<f64> = h.iter().copied().filter(|v| v.is_finite()).collect();
+    let avg = read.iter().sum::<f64>() / read.len().max(1) as f64;
+    let peak = read.iter().cloned().fold(0.0, f64::max);
     format!(
         "now {:.0}% · avg {:.0}% · peak {:.0}%",
         now * 100.0,

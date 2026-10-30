@@ -108,6 +108,7 @@ mod sock;
 mod sshcfg;
 mod statelog;
 mod statscmd;
+mod statshist;
 // staged for the dashboard rewrite: not wired into the UI yet
 #[allow(dead_code)]
 mod stream;

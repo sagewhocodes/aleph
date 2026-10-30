@@ -178,6 +178,17 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
         KeyCode::Down | KeyCode::Char('j') => d.mon.sel = (d.mon.sel + 1) % n,
         KeyCode::Up | KeyCode::Char('k') => d.mon.sel = (d.mon.sel + n - 1) % n,
         KeyCode::Enter if d.mon.sub == Sub::Fleet => set_sub(d, Sub::Overview),
+        KeyCode::Char(ch @ ('+' | '=' | '-')) if d.mon.sub.has_graphs() => {
+            let now = d.cfg.get_or("stats_window");
+            let next = crate::statshist::scale_step(&now, ch != '-');
+            if next != now {
+                if let Err(e) = d.cfg.set("stats_window", next) {
+                    d.error(format!("couldn't save: {e}"));
+                } else {
+                    d.note(format!("graphs: the last {next}"));
+                }
+            }
+        }
         KeyCode::Char(ch) => {
             if let Some(s) = Sub::from_key(ch).filter(|s| pages(d).contains(s)) {
                 set_sub(d, s);
@@ -241,6 +252,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
         Sub::Fleet => vec![
             ("↑↓", "machine"),
             ("enter", "its overview"),
+            ("+ -", "timescale"),
             ("←→", "view"),
             ("f o c m g p n", "jump"),
             ("esc", "back"),
@@ -261,6 +273,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
             ("esc", "back"),
         ],
         _ => vec![
+            ("+ -", "timescale"),
             ("←→", "view"),
             ("[ ]", "machine"),
             ("f o c m g p n", "jump"),
@@ -310,7 +323,10 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
     let st: Option<Stats> = d.stats(&alias);
     let updated = st.as_ref().and_then(|s| s.updated);
     let shown = pages(d);
-    d.mon.hits = md::strip(f, strip_r, d.mon.sub, &alias, color, updated, &shown);
+    let scale = d.cfg.get_or("stats_window");
+    d.mon.hits = md::strip(
+        f, strip_r, d.mon.sub, &alias, color, updated, &scale, &shown,
+    );
     let empty = Stats::default();
     if d.mon.sub == Sub::Fleet {
         // every machine's stats, for the table and its charts

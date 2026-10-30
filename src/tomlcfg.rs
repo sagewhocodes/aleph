@@ -54,6 +54,8 @@ pub const PATHS: &[(&str, &str)] = &[
     // stats and services
     ("stats", "stats.mode"),
     ("stats_interval", "stats.interval"),
+    ("stats_window", "stats.window"),
+    ("stats_keep_hours", "stats.keep_hours"),
     ("services", "services.watch"),
     ("services_interval", "services.interval"),
     // analytics (aleph usage)

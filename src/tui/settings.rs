@@ -481,6 +481,15 @@ fn rows_of(d: &Dash, sec: &str) -> Vec<Row> {
         .filter(|k| config::known(k).is_none() && !k.starts_with("key."))
         .filter(|k| config::section_of(k) == sec)
         .collect();
+    // how long each machine keeps its graphs, set or not
+    if sec == "Machines" {
+        extra.extend(
+            d.fleet
+                .hosts
+                .iter()
+                .map(|h| format!("host.{}.stats_keep_hours", h.alias)),
+        );
+    }
     extra.sort();
     extra.dedup();
     v.extend(extra.into_iter().map(Row::Extra));

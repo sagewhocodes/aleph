@@ -135,6 +135,7 @@ pub fn cmd(mut a: Args) -> ExitCode {
     // while this process holds the hub lock (one hub per computer; hub.machine
     // picks the computer)
     let mut hub = crate::auto::Hub::new();
+    let mut history = crate::statshist::Keeper::default();
     // the daemon's router also does the desktop notifications
     hub.router = crate::router::Router::new(true);
     let mut lock: Option<crate::auto::HubLock> = None;
@@ -240,6 +241,7 @@ pub fn cmd(mut a: Args) -> ExitCode {
         let t0 = std::time::Instant::now();
         hub.tick(&a.cfg, &f, &trans, &fresh);
         slow("the hub", t0);
+        history.tick(&a.cfg, &a.cfg.fleet());
         let t0 = std::time::Instant::now();
         autostart.tick(&a.cfg, &f);
         slow("autostart", t0);

@@ -111,6 +111,13 @@ impl Sub {
             Sub::Usage => 'u',
         }
     }
+    /// Its graphs go by the timescale (`+ -`).
+    pub fn has_graphs(self) -> bool {
+        !matches!(
+            self,
+            Sub::Usage | Sub::Timeline | Sub::Procs | Sub::Services
+        )
+    }
     /// Lower-case letters only: upper case is left for toggles (`F`, `P`, `S`).
     pub fn from_key(k: char) -> Option<Sub> {
         Sub::ALL.into_iter().find(|s| s.key() == k)
@@ -336,12 +343,13 @@ fn avg_peak(data: &[f64]) -> (f64, f64) {
 }
 /// `avg_peak` of a fraction history, each sample clamped to 0..1.
 fn avg_peak_frac(data: &[f64]) -> (f64, f64) {
-    let (mut s, mut p) = (0.0, 0.0f64);
-    for v in data.iter().map(|v| fr(*v)) {
+    let (mut s, mut n, mut p) = (0.0, 0usize, 0.0f64);
+    // a gap (nothing was read then) isn't a zero
+    for v in data.iter().filter(|v| v.is_finite()).map(|v| fr(*v)) {
         s += v;
+        n += 1;
         p = p.max(v);
     }
-    let n = data.len();
     (if n > 0 { s / n as f64 } else { 0.0 }, p)
 }
 /// Seconds per sample for the time axes (1 until measured).
@@ -370,13 +378,15 @@ fn sum_hists<'a>(hs: impl Iterator<Item = &'a [f64]>) -> Vec<f64> {
     for h in hs {
         // align at the newest sample
         if h.len() > out.len() {
-            let mut v = vec![0.0; h.len() - out.len()];
+            let mut v = vec![f64::NAN; h.len() - out.len()];
             v.extend(out);
             out = v;
         }
         let off = out.len() - h.len();
-        for (i, x) in h.iter().enumerate() {
-            out[off + i] += fin(*x).max(0.0);
+        // a gap stays one only where nothing at all was read
+        for (i, x) in h.iter().enumerate().filter(|(_, x)| x.is_finite()) {
+            let at = &mut out[off + i];
+            *at = fin(*at).max(0.0) + x.max(0.0);
         }
     }
     out
@@ -1740,7 +1750,7 @@ fn kv_grid(
 /// The GPU history: util as an area, VRAM, power (% of the limit) and
 /// temperature (°C on the same 0–100 scale) as lines.
 fn gpu_chart(f: &mut Frame, r: Rect, g: &Gpu, period: f64, axes: bool) {
-    let temp: Vec<f64> = g.temp_hist.iter().map(|t| fin(*t) / 100.0).collect();
+    let temp: Vec<f64> = g.temp_hist.iter().map(|t| *t / 100.0).collect();
     let mut s = vec![Ser::area(&g.hist, CP::Solid(c_util()))];
     if fin(g.mem_total) > 0.0 {
         s.push(Ser::line(&g.mem_hist, c_vram()));
@@ -1983,6 +1993,7 @@ fn strip_gap(v: usize) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn strip(
     f: &mut Frame,
     r: Rect,
@@ -1990,6 +2001,7 @@ pub fn strip(
     alias: &str,
     color: Color,
     updated: Option<Instant>,
+    scale: &str,
     pages: &[Sub],
 ) -> Vec<(Rect, Sub)> {
     let r = area(f, r);
@@ -2016,6 +2028,11 @@ pub fn strip(
             format!("{} waiting for stats", ui::spinner(epoch())),
             ui::faint(),
         ),
+    };
+    let fresh = if sub.has_graphs() {
+        (format!("⏱ {scale}  {}", fresh.0), fresh.1)
+    } else {
+        fresh
     };
     let fw = ui::width(&fresh.0);
     let chip_full = 4 + 1 + ui::width(&alias);

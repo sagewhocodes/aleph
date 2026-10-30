@@ -1545,7 +1545,14 @@ pub fn spark(samples: &[f64], w: usize, col: Color) -> Span<'static> {
     let start = samples.len().saturating_sub(w);
     let mut s: String = samples[start..]
         .iter()
-        .map(|v| SPARK[((v.clamp(0.0, 1.0) * 7.0).round()) as usize])
+        .map(|v| {
+            // a gap: nothing was read then
+            if v.is_finite() {
+                SPARK[((v.clamp(0.0, 1.0) * 7.0).round()) as usize]
+            } else {
+                " "
+            }
+        })
         .collect();
     let pad = w.saturating_sub(samples.len() - start);
     s = format!("{}{}", " ".repeat(pad), s);

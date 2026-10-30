@@ -89,6 +89,8 @@ dashboard's Settings tab edits them. Per-machine settings are `host.<alias>.<key
 | `hosts` | `fleet.machines` | — | machines shown together (comma-separated); empty = the default host |
 | `stats` | `stats.mode` | `on` (on \| selected \| off) | live machine stats (CPU, GPU, memory) in the dashboard |
 | `stats_interval` | `stats.interval` | `1` (number) | seconds between machine stat samples |
+| `stats_window` | `stats.window` | `30m` (5m \| 15m \| 30m \| 1h \| 3h \| 6h \| 12h) | how far back the resource graphs reach (+ - in Monitor) |
+| `stats_keep_hours` | `stats.keep_hours` | `12` (number) | hours of resource graphs to keep per machine, sampled by the daemon even with nothing open (0: only while a view shows them; one machine: host.<name>.stats_keep_hours) |
 | `services` | `services.watch` | `off` (off \| on) | watch for local LLM servers and AI gateways (Ollama, LM Studio, vLLM, …) on every machine; service.<id>=off skips one |
 | `services_interval` | `services.interval` | `30` (number) | seconds between LLM-service scans of each machine |
 | `local` | `fleet.local` | `true` (on/off) | show this computer's own herdr as the `local` machine (when herdr is installed here) |
@@ -248,6 +250,7 @@ Set as `host.<alias>.<key>` (`[hosts.<alias>] <key>`), e.g. `aleph settings set 
 | `moshi` | what its sessions send to Moshi: auto, full, machine-only or off |
 | `hooks` | the agents' own hooks report from there (on / off; aleph hooks install) |
 | `paused` | Aleph doesn't poll it (Z in Fleet) |
+| `stats_keep_hours` | hours of resource graphs it keeps (over stats_keep_hours; 0: only while a view shows them) |
 | `agent` | the agent that starts there by default |
 | `args` | arguments agents start with there |
 | `dir` | the folder new sessions start in there |

@@ -2,6 +2,18 @@
 
 ## 2.1.0 — in progress
 
+### Resource graphs
+- **Twelve hours of history, by default, for every machine.** The daemon keeps sampling with nothing open, so a graph has
+  the hours before you looked. `stats_keep_hours` sets how much, and Settings › Machines has a row per machine to give each
+  its own (0: only while a view shows it, and no stream there). They stay in memory at a fixed size, and survive a restart
+  because the daemon also writes them to `state/stats/<machine>.jsonl`.
+- **`+` and `-` change the timescale in Monitor:** 5 m, 15 m, 30 m by default, 1 h, 3 h, 6 h and 12 h. It says which on the
+  top right and the axis counts in it.
+- **The graphs don't redraw any more.** A point appears when its time bucket closes and nothing already drawn moves, and
+  leaving Monitor and coming back finds the same graph.
+- **Time nothing was read stays blank,** in charts and sparklines, and averages skip it instead of counting it as zero.
+- This is the one connection Aleph keeps open without a view asking for it: one quiet stream per machine, every 30 s.
+
 ### Keys on the timeline
 - **`G` opens the turn view on Monitor's Timeline too,** as it does everywhere else, and `z` `Z` fold or expand every
   turn right there, without opening anything first. Your choice carries to the next conversation you move to.

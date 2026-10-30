@@ -120,6 +120,7 @@ pub const HOST_KEYS: &[(&str, &str)] = &[
     ("moshi", "what its sessions send to Moshi: auto, full, machine-only or off"),
     ("hooks", "the agents' own hooks report from there (on / off; aleph hooks install)"),
     ("paused", "Aleph doesn't poll it (Z in Fleet)"),
+    ("stats_keep_hours", "hours of resource graphs it keeps (over stats_keep_hours; 0: only while a view shows them)"),
     ("agent", "the agent that starts there by default"),
     ("args", "arguments agents start with there"),
     ("dir", "the folder new sessions start in there"),
@@ -215,8 +216,9 @@ pub fn section_of(key: &str) -> &'static str {
         k if k.starts_with("layout.") || k.starts_with("workspace.") || k.starts_with("theme.") => {
             "Appearance"
         }
-        "ssh_host" | "machine" | "hosts" | "local" | "stats" | "stats_interval" | "services"
-        | "services_interval" | "fleet.group" => "Machines",
+        "ssh_host" | "machine" | "hosts" | "local" | "stats" | "stats_interval"
+        | "stats_window" | "stats_keep_hours" | "services" | "services_interval"
+        | "fleet.group" => "Machines",
         "agent"
         | "agents"
         | "agents.node"
@@ -294,6 +296,18 @@ pub const KNOWN: &[Known] = &[
         default: "1",
         kind: Kind::Num,
         help: "seconds between machine stat samples",
+    },
+    Known {
+        key: "stats_window",
+        default: "30m",
+        kind: Kind::Choice(&["5m", "15m", "30m", "1h", "3h", "6h", "12h"]),
+        help: "how far back the resource graphs reach (+ - in Monitor)",
+    },
+    Known {
+        key: "stats_keep_hours",
+        default: "12",
+        kind: Kind::Num,
+        help: "hours of resource graphs to keep per machine, sampled by the daemon even with nothing open (0: only while a view shows them; one machine: host.<name>.stats_keep_hours)",
     },
     Known {
         key: "services",

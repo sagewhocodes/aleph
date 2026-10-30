@@ -537,6 +537,7 @@ fn draw_at(v: V, st: &Stats, w: u16, h: u16, r: Rect) -> String {
                 "b31",
                 Color::Rgb(0xd9, 0x77, 0x57),
                 st.updated,
+                "30m",
                 &Sub::ALL,
             );
             for (rr, _) in hits {
@@ -550,6 +551,20 @@ fn draw_at(v: V, st: &Stats, w: u16, h: u16, r: Rect) -> String {
     })
     .unwrap();
     text(&t)
+}
+
+#[test]
+fn a_gap_in_a_history_is_not_a_zero() {
+    let (avg, peak) = avg_peak_frac(&[f64::NAN, f64::NAN, 0.5, 0.25]);
+    assert!((avg - 0.375).abs() < 1e-9, "{avg}");
+    assert_eq!(peak, 0.5);
+    let sum = sum_hists([[f64::NAN, 0.5].as_slice(), [f64::NAN, 0.25].as_slice()].into_iter());
+    assert!(sum[0].is_nan(), "nothing read by either: still a gap");
+    assert_eq!(sum[1], 0.75);
+    let one = sum_hists([[f64::NAN, 0.5].as_slice(), [0.25, 0.25].as_slice()].into_iter());
+    assert_eq!(one, vec![0.25, 0.75], "one read it: that counts");
+    let spark = ui::spark(&[f64::NAN, 1.0], 2, Color::Red);
+    assert_eq!(spark.content, " █");
 }
 
 #[test]
@@ -1069,6 +1084,7 @@ fn monitor_strip_targets() {
             "b31",
             Color::Red,
             Some(Instant::now()),
+            "30m",
             &Sub::ALL,
         );
     })
@@ -1093,7 +1109,16 @@ fn monitor_strip_targets() {
     // narrow: still every target, short labels
     let mut t = term(40, 1);
     t.draw(|f| {
-        hits = strip(f, f.area(), Sub::Cpu, "b31", Color::Red, None, &Sub::ALL);
+        hits = strip(
+            f,
+            f.area(),
+            Sub::Cpu,
+            "b31",
+            Color::Red,
+            None,
+            "30m",
+            &Sub::ALL,
+        );
     })
     .unwrap();
     assert_eq!(hits.len(), Sub::ALL.len());
@@ -1611,7 +1636,7 @@ fn monitor_perf() {
                     V::Net => net(f, r, &rich),
                     V::Compact(m) => compact(f, r, "b31", Color::Red, &rich, m, t0),
                     V::Strip => {
-                        strip(f, r, Sub::Cpu, "b31", Color::Red, None, &Sub::ALL);
+                        strip(f, r, Sub::Cpu, "b31", Color::Red, None, "30m", &Sub::ALL);
                     }
                     V::Header => header(f, r, "b31", Color::Red, &rich),
                 }

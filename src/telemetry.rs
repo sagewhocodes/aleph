@@ -2149,6 +2149,45 @@ impl Acc {
 }
 
 /// A running sampler for one host. Dropping it kills the ssh stream.
+impl Stats {
+    /// Every history it keeps, by a name that holds from one sample to the next.
+    pub fn hists_mut(&mut self) -> Vec<(String, &mut Vec<f64>)> {
+        let mut v: Vec<(String, &mut Vec<f64>)> = vec![
+            ("cpu".into(), &mut self.cpu_hist),
+            ("cpu_user".into(), &mut self.cpu_user_hist),
+            ("cpu_system".into(), &mut self.cpu_system_hist),
+            ("cpu_iowait".into(), &mut self.cpu_iowait_hist),
+            ("cpu_temp".into(), &mut self.cpu_temp_hist),
+            ("load".into(), &mut self.load_hist),
+            ("mem".into(), &mut self.mem_hist),
+            ("mem_cache".into(), &mut self.mem_cache_hist),
+            ("swap".into(), &mut self.swap_hist),
+            ("net".into(), &mut self.net_hist),
+            ("net_rx".into(), &mut self.net_rx_hist),
+            ("net_tx".into(), &mut self.net_tx_hist),
+        ];
+        for g in &mut self.gpus {
+            let k = if g.bus.is_empty() { &g.index } else { &g.bus };
+            let k = format!("gpu:{k}");
+            v.push((format!("{k}:util"), &mut g.hist));
+            v.push((format!("{k}:mem"), &mut g.mem_hist));
+            v.push((format!("{k}:power"), &mut g.power_hist));
+            v.push((format!("{k}:temp"), &mut g.temp_hist));
+        }
+        for n in &mut self.nets {
+            v.push((format!("if:{}", n.name), &mut n.hist));
+            v.push((format!("if:{}:rx", n.name), &mut n.rx_hist));
+            v.push((format!("if:{}:tx", n.name), &mut n.tx_hist));
+        }
+        for d in &mut self.disk_io {
+            v.push((format!("disk:{}", d.name), &mut d.hist));
+            v.push((format!("disk:{}:read", d.name), &mut d.read_hist));
+            v.push((format!("disk:{}:write", d.name), &mut d.write_hist));
+        }
+        v
+    }
+}
+
 pub struct Telemetry {
     pub alias: String,
     pub stats: Arc<Mutex<Stats>>,
@@ -2270,7 +2309,11 @@ fn run_once(
     let mut acc = Acc::default();
     for l in BufReader::new(out).lines().map_while(Result::ok) {
         let mut g = st.lock().unwrap();
+        let before = g.samples;
         acc.line(&mut g, &l);
+        if g.samples != before {
+            crate::statshist::record(alias, crate::cache::now(), &mut g);
+        }
     }
     if let Some(mut c) = ch.lock().unwrap().take() {
         let _ = c.wait();
