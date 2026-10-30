@@ -2,6 +2,12 @@
 
 ## 2.1.0 — in progress
 
+### Raycast
+- **Picking the extension in `aleph setup` installs it,** with no commands to copy and no checkout of Aleph needed. It comes
+  from this version's release, checked against its checksum (and signature, with `update_pubkey`), then builds and imports
+  itself. Node goes on first when it's missing and you have Homebrew.
+- **It then asks Raycast for the menu bar,** so you needn't go and find it. Raycast shows its own confirmation the first time.
+
 ### Cursor's Agent SDK
 - **Run and watch agents written as code.** `aleph sdk dev`, `validate` and `run -m "…"` start a project as a session, on any
   machine. It's on Fleet like any other: working while the command runs, with the command on the row, and it tells you when

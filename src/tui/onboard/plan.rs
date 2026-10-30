@@ -273,7 +273,7 @@ impl Action {
                 "the opt-in `claude` function (Claude Code's own commands pass through)".into()
             }
             Action::HerdrPlugin => "herdr companion plugin + prefix a / i / y keys".into(),
-            Action::Raycast => "build and import the Raycast extension".into(),
+            Action::Raycast => "install the Raycast extension and its menu bar".into(),
             Action::MoshiOn => "Aleph → Moshi: cards, phone approvals, live jobs".into(),
             Action::Daemon { args } => format!("aleph daemon {}", args.join(" ")),
             Action::HerdrLocal => "install herdr on this computer".into(),

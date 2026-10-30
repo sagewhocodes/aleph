@@ -1,6 +1,7 @@
 //! Step 10, Integrations: Aleph in the tools around it, each opt-in. Tab
 //! completion and the opt-in `claude` function in your shell's rc file; the
-//! Raycast extension (built from Aleph's source and imported); a companion
+//! Raycast extension (from Aleph's source, or this version's release file, built
+//! and imported, and its menu bar asked for); a companion
 //! plugin for this computer's herdr with prefix keys (prefix+a the dashboard,
 //! prefix+i the Inbox, prefix+y approve the focused agent); Moshi; and the
 //! extras that make notifications and logos look right (terminal-notifier, a
@@ -104,25 +105,84 @@ fn zshrc() -> PathBuf {
         .join(".zshrc")
 }
 
-/// The Raycast extension's source, when Aleph runs from a checkout.
+/// The release file holding the Raycast extension's source (`release.yml`).
+const RAYCAST_FILE: &str = "aleph-raycast-extension.tar.gz";
+
+/// Where this version's extension goes when it came from its release.
+fn fetched_raycast() -> PathBuf {
+    config::data_dir()
+        .join("raycast-extension")
+        .join(env!("CARGO_PKG_VERSION"))
+}
+
+/// The Raycast extension's source: next to Aleph when it runs from a checkout, or
+/// already fetched for this version.
 fn raycast_src() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     exe.ancestors()
         .take(5)
         .map(|d| d.join("extras/raycast-extension"))
+        .chain(std::iter::once(fetched_raycast()))
         .find(|d| d.join("package.json").is_file())
 }
 
-/// Build the Raycast extension and import it: `npm install`, then `ray
-/// develop` — which imports it into Raycast and then watches for edits
-/// forever, so it's stopped (ctrl+c's SIGINT) a few seconds after it says
-/// it built; the extension stays in Raycast. Each line of output goes to
-/// `on_line`; npm's audit, funding and deprecation chatter stays out.
+/// This version's extension from its release, checksum checked, unpacked into `to`.
+fn fetch_raycast(cfg: &config::Config, to: &Path) -> Result<(), String> {
+    let tmp = to.with_extension(format!("tmp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let got = (|| {
+        let file = tmp.join(RAYCAST_FILE);
+        crate::selfupdate::fetch_own_release_file(cfg, RAYCAST_FILE, &file)?;
+        let o = crate::proc::cap(
+            "tar",
+            &[
+                "-xzf",
+                &file.to_string_lossy(),
+                "-C",
+                &tmp.to_string_lossy(),
+            ],
+            Duration::from_secs(60),
+        );
+        if !o.ok() {
+            return Err(format!("couldn't unpack it: {}", o.reason()));
+        }
+        let src = tmp.join("raycast-extension");
+        if !src.join("package.json").is_file() {
+            return Err("the release file has no extension in it".to_string());
+        }
+        let _ = std::fs::remove_dir_all(to);
+        std::fs::rename(&src, to).map_err(|e| e.to_string())
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    got
+}
+
+/// Raycast's own link to the extension's menu bar command (`author` and the command's
+/// name are in its package.json). Raycast asks you to confirm a link once.
+fn menu_bar_link() -> &'static str {
+    "raycast://extensions/aleph/aleph/menu-bar?launchType=background"
+}
+
+/// Fetch the Raycast extension if it isn't here, build and import it: `npm
+/// install`, then `ray develop` — which imports it into Raycast and then watches
+/// for edits forever, so it's stopped (ctrl+c's SIGINT) a few seconds after it says
+/// it built; the extension stays in Raycast. Then its menu bar is asked for. Each
+/// line of output goes to `on_line`; npm's audit, funding and deprecation chatter
+/// stays out.
 pub(crate) fn apply_raycast(mut on_line: impl FnMut(&str)) -> Result<String, String> {
     use std::cell::Cell;
     use std::process::Command;
     use std::time::{Duration, Instant};
-    let src = raycast_src().ok_or("the extension's source isn't next to this aleph")?;
+    let src = match raycast_src() {
+        Some(p) => p,
+        None => {
+            on_line("fetching the extension from this version's release");
+            let to = fetched_raycast();
+            fetch_raycast(&config::Config::load(), &to)?;
+            to
+        }
+    };
     let with_env = |c: &mut Command| {
         c.current_dir(&src)
             .env("NODE_OPTIONS", "--no-deprecation")
@@ -181,7 +241,13 @@ pub(crate) fn apply_raycast(mut on_line: impl FnMut(&str)) -> Result<String, Str
     )
     .map_err(|e| format!("ray: {e}"))?;
     if built.get().is_some() {
-        Ok("imported into Raycast — search Aleph there".into())
+        on_line("asking Raycast for the menu bar");
+        let asked = crate::proc::cap("open", &["-g", menu_bar_link()], Duration::from_secs(10));
+        Ok(if asked.ok() {
+            "imported into Raycast. It asks once to run the menu bar: confirm it there".into()
+        } else {
+            "imported into Raycast: search Aleph there, and run its Menu Bar command once".into()
+        })
     } else if o.timed_out {
         Err("ray develop didn't finish building in 3 minutes — is Raycast running?".into())
     } else {
@@ -441,18 +507,24 @@ pub(crate) fn rows(w: &Wiz) -> Vec<Row> {
         v.push(Row::info("Raycast is a macOS app: its Aleph extension installs on your Mac (aleph setup there, step 10)."));
     } else if !f.raycast_app {
         v.push(Row::info("Raycast isn't installed (raycast.com) — the extension lists sessions, approves and shows a menu bar count."));
-    } else if let (Some(src), true) = (&f.raycast_src, f.npm) {
+    } else if f.npm || f.brew {
+        let how = match (&f.raycast_src, f.npm) {
+            (Some(src), true) => format!("builds from {}", crate::doctor::tilde(src)),
+            (Some(src), false) => {
+                format!("Node first, then builds from {}", crate::doctor::tilde(src))
+            }
+            (None, true) => "fetched from this version's release, checked, then built".to_string(),
+            (None, false) => {
+                "Node first, then fetched from this version's release and built".to_string()
+            }
+        };
         v.push(
-            Row::pick("raycast", "build and import the extension", w.plan.has(&Action::Raycast))
-                .note(format!("npm install, then ray develop in {}", crate::doctor::tilde(src)))
+            Row::pick("raycast", "install the extension and its menu bar", w.plan.has(&Action::Raycast))
+                .note(how)
                 .why("Runs when you apply: npm installs the extension's packages, then `ray develop` builds it and imports it into Raycast. Aleph stops it once Raycast has it; the extension stays installed."),
         );
     } else {
-        v.push(
-            Row::check(St::Info, "raycast-how", "extension", "in Aleph's source: extras/raycast-extension".into())
-                .fix("copy the commands")
-                .why("Clone Aleph's repository, then: cd extras/raycast-extension && npm install && npm run dev (Node 20+), and ctrl+c once Raycast lists the Aleph commands — the extension stays."),
-        );
+        v.push(Row::info("The extension builds with Node, and neither Node nor Homebrew is here: install Node (nodejs.org), then come back to this step."));
     }
     v.push(Row::head("herdr"));
     if f.plugin {
@@ -549,19 +621,19 @@ pub(crate) fn act(w: &mut Wiz, ev: Ev) -> Option<Hand> {
         Ev::Pick(id) => match id.as_str() {
             "comp" => toggle(w, Action::Completions),
             "wrap" => toggle(w, Action::Wrapper),
-            "raycast" => toggle(w, Action::Raycast),
+            "raycast" => {
+                toggle(w, Action::Raycast);
+                // it builds with npm: Node goes on first, with what you already use
+                let on = w.plan.has(&Action::Raycast);
+                let needs_node = w.ig.facts.as_ref().is_some_and(|f| !f.npm && f.brew);
+                if needs_node {
+                    w.plan.want(Step::Integrations, Action::tool("node"), on);
+                }
+            }
             "moshi-hook" => toggle(w, Action::moshi_hook()),
             "plugin" => toggle(w, Action::HerdrPlugin),
             _ => {}
         },
-        Ev::Fix(id) if id == "raycast-how" => {
-            let cmd = "cd extras/raycast-extension && npm install && npm run dev";
-            let ok = crate::tui::copy(cmd);
-            w.toast(
-                !ok,
-                format!("{}{cmd}", if ok { "copied: " } else { "run: " }),
-            );
-        }
         Ev::Fix(id) if id == "tn" || id == "font" => {
             let a = if id == "tn" {
                 Action::notifier()
@@ -600,6 +672,76 @@ pub(crate) fn act(w: &mut Wiz, ev: Ev) -> Option<Hand> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_extension_comes_from_its_release_checked() {
+        let t = std::env::temp_dir().join(format!("aleph-ray-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let src = t.join("pack/raycast-extension");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("package.json"), "{}").unwrap();
+        let rel = t.join("release");
+        std::fs::create_dir_all(&rel).unwrap();
+        let file = rel.join(RAYCAST_FILE);
+        let o = std::process::Command::new("tar")
+            .args(["-czf", &file.to_string_lossy(), "-C"])
+            .arg(t.join("pack"))
+            .arg("raycast-extension")
+            .output()
+            .unwrap();
+        assert!(o.status.success());
+        let o = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "cd '{}' && (shasum -a 256 {RAYCAST_FILE} || sha256sum {RAYCAST_FILE}) > SHA256SUMS",
+                rel.display()
+            ))
+            .output()
+            .unwrap();
+        assert!(o.status.success());
+        let base = format!("file://{}", rel.display());
+        std::env::set_var("ALEPH_RELEASE_BASE", &base);
+        let to = t.join("v1");
+        let cfg = config::Config::in_memory(&[]);
+        fetch_raycast(&cfg, &to).unwrap();
+        assert!(to.join("package.json").is_file());
+        // a file that doesn't match its checksum never unpacks
+        std::fs::write(
+            rel.join("SHA256SUMS"),
+            format!("{}  {RAYCAST_FILE}\n", "0".repeat(64)),
+        )
+        .unwrap();
+        let to2 = t.join("v2");
+        let e = fetch_raycast(&cfg, &to2).unwrap_err();
+        assert!(e.contains("checksum mismatch"), "{e}");
+        assert!(!to2.exists());
+        std::env::remove_var("ALEPH_RELEASE_BASE");
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn the_menu_bar_link_names_the_real_command() {
+        let pkg: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../extras/raycast-extension/package.json"
+        ))
+        .unwrap();
+        let (author, name) = (
+            pkg["author"].as_str().unwrap(),
+            pkg["name"].as_str().unwrap(),
+        );
+        let link = menu_bar_link();
+        assert!(
+            link.starts_with(&format!("raycast://extensions/{author}/{name}/menu-bar")),
+            "{link}"
+        );
+        let cmd = pkg["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "menu-bar")
+            .expect("the command");
+        assert_eq!(cmd["mode"], "menu-bar");
+    }
+
     use super::*;
 
     #[test]

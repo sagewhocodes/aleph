@@ -341,6 +341,71 @@ fn install(name: &str, url: &str, sums_url: &str, sig: SigCheck, exe: &Path) -> 
     r
 }
 
+/// The repository Aleph's releases come from, unless `update_repo` says another.
+pub const HOME_REPO: &str = "sagewhocodes/aleph";
+
+/// Fetch one file of the release this build came from, into `dest`, checked against
+/// that release's SHA256SUMS (and its signature, with `update_pubkey`).
+/// `ALEPH_RELEASE_BASE` stands in for the release's address, for tests.
+pub fn fetch_own_release_file(
+    cfg: &crate::config::Config,
+    name: &str,
+    dest: &Path,
+) -> Result<(), String> {
+    let base = crate::brand::env("RELEASE_BASE").unwrap_or_else(|| {
+        let repo = cfg
+            .get("update_repo")
+            .filter(|r| valid_repo(r))
+            .unwrap_or_else(|| HOME_REPO.to_string());
+        format!(
+            "https://github.com/{repo}/releases/download/v{}",
+            env!("CARGO_PKG_VERSION")
+        )
+    });
+    let pubkey = cfg.get("update_pubkey").filter(|k| !k.trim().is_empty());
+    let sig_url = format!("{base}/SHA256SUMS.minisig");
+    download_checked(
+        dest,
+        name,
+        &format!("{base}/{name}"),
+        &format!("{base}/SHA256SUMS"),
+        pubkey.as_deref().map(|k| (k, sig_url.as_str())),
+    )
+}
+
+/// Download `url` to `archive`, and check it against the checksums (and their
+/// signature, when there's a key to check it with).
+fn download_checked(
+    archive: &Path,
+    name: &str,
+    url: &str,
+    sums_url: &str,
+    sig: SigCheck,
+) -> Result<(), String> {
+    let a = archive.to_string_lossy().to_string();
+    let dl = curl(&["-o", &a, url], 300).map_err(|e| format!("download failed: {e}"));
+    let sums = dl.and_then(|_| {
+        curl(&[sums_url], 60)
+            .map(|o| o.text())
+            .map_err(|e| format!("couldn't fetch SHA256SUMS: {e}"))
+    })?;
+    // the checksums are what the signature covers; the archive is checked against them
+    if let Some((pubkey, sig_url)) = sig {
+        let s = curl(&[sig_url], 60)
+            .map(|o| o.text())
+            .map_err(|e| format!("couldn't fetch SHA256SUMS.minisig: {e}"))?;
+        verify_sums(&sums, &s, pubkey).map_err(|e| format!("{e} — not installed"))?;
+    }
+    let want = sum_for(&sums, name).ok_or_else(|| format!("SHA256SUMS has no entry for {name}"))?;
+    let got = sha256(archive)?;
+    if got != want {
+        return Err(format!(
+            "checksum mismatch for {name} (expected {want}, got {got}) — not installed"
+        ));
+    }
+    Ok(())
+}
+
 fn install_in(
     dir: &Path,
     name: &str,
@@ -352,28 +417,9 @@ fn install_in(
     let sp = Spinner::start(format!("Downloading {name}"));
     let archive = dir.join(name);
     let a = archive.to_string_lossy().to_string();
-    let dl = curl(&["-o", &a, url], 300).map_err(|e| format!("download failed: {e}"));
-    let sums = dl.and_then(|_| {
-        curl(&[sums_url], 60)
-            .map(|o| o.text())
-            .map_err(|e| format!("couldn't fetch SHA256SUMS: {e}"))
-    });
+    let checked = download_checked(&archive, name, url, sums_url, sig);
     sp.stop();
-    let sums = sums?;
-    // the checksums are what the signature covers; the archive is checked against them
-    if let Some((pubkey, sig_url)) = sig {
-        let s = curl(&[sig_url], 60)
-            .map(|o| o.text())
-            .map_err(|e| format!("couldn't fetch SHA256SUMS.minisig: {e}"))?;
-        verify_sums(&sums, &s, pubkey).map_err(|e| format!("{e} — not installed"))?;
-    }
-    let want = sum_for(&sums, name).ok_or_else(|| format!("SHA256SUMS has no entry for {name}"))?;
-    let got = sha256(&archive)?;
-    if got != want {
-        return Err(format!(
-            "checksum mismatch for {name} (expected {want}, got {got}) — not installed"
-        ));
-    }
+    checked?;
     let out = dir.join("x");
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     let o = proc::cap(

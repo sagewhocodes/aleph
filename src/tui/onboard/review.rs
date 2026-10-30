@@ -1335,7 +1335,7 @@ pub(crate) fn runs_line(a: &Action) -> String {
         Action::Completions => "two lines in your shell's rc file (a backup is kept)".into(),
         Action::Wrapper => "a claude() function in ~/.zshrc (a backup is kept)".into(),
         Action::HerdrPlugin => "herdr plugin link, and prefix keys in herdr's config".into(),
-        Action::Raycast => "npm install, then ray develop — stopped once Raycast has it".into(),
+        Action::Raycast => "npm install, then ray develop, stopped once Raycast has it; Raycast asks once to run the menu bar".into(),
         Action::MoshiOn => "aleph moshi install".into(),
         Action::Daemon { args } => format!("aleph daemon {}", args.join(" ")),
         Action::HerdrLocal => herdr_install_line(),

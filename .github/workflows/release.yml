@@ -8,6 +8,7 @@
 # What a release carries is the self-update contract (`aleph self-update`):
 #   aleph-<target>.tar.gz            the `aleph` binary at the archive root
 #   aleph-showcase-<target>.tar.gz   the same with showcase mode built in
+#   aleph-raycast-extension.tar.gz   the Raycast extension's source, with its logos
 #   SHA256SUMS                       `<sha256>  <asset>` lines (sha256sum format)
 #   SHA256SUMS.minisig               its signature (when the repo has MINISIGN_SECRET_KEY)
 # plus aleph.rb, the Homebrew formula rendered from SHA256SUMS.
@@ -147,6 +148,14 @@ jobs:
           path: dist
           pattern: aleph-*
           merge-multiple: true
+      # `aleph setup` installs the Raycast extension from this on a computer with no
+      # checkout (src/tui/onboard/integrations.rs); its logos aren't committed there
+      - name: the Raycast extension's source
+        run: |
+          set -eu
+          sh extras/raycast-extension/scripts/sync-logos.sh
+          tar -C extras --exclude=node_modules --exclude=dist -czf dist/aleph-raycast-extension.tar.gz raycast-extension
+          tar -tzf dist/aleph-raycast-extension.tar.gz | grep -q '^raycast-extension/package.json$'
       - name: SHA256SUMS + Homebrew formula
         run: |
           set -eu
