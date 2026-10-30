@@ -721,7 +721,9 @@ impl Dash {
                     self.rung.remove(&s.key());
                     self.finished_toast(s, who);
                 }
-                _ if t.from.is_empty() => self.toast(Level::Info, format!("+ {who} started")),
+                _ if t.from.is_empty() && self.cfg.flag("inbox.lifecycle") => {
+                    self.toast(Level::Info, format!("+ {who} started"))
+                }
                 _ => {
                     self.rung.remove(&s.key());
                 }

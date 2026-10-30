@@ -26,6 +26,7 @@ dashboard's Settings tab edits them. Per-machine settings are `host.<alias>.<key
 | `wall_fit` | `tile.fit` | `on` (on \| off) | Terminals sizes each shown session to its tile (like attaching does); off watches it at its own size |
 | `inbox.layout` | `inbox.layout` | `overview` (overview \| cards \| table) | the Inbox's layout: overview (KPI tiles, a panel per group, the day's activity), cards (live sessions as cards), table (two lines a row); L switches while you look |
 | `inbox.group` | `inbox.group` | `machine` (machine \| day \| agent \| type \| session) | how the Inbox groups what happened (G switches while you look) |
+| `inbox.lifecycle` | `inbox.lifecycle` | `false` (on/off) | list sessions starting and ending in the Inbox, and toast a start; off, the Launches filter still has your starts |
 | `inbox.hide_ended` | `inbox.hide_ended` | `false` (on/off) | hide alerts whose session has ended (e switches it in the Inbox); off, they're dimmed and listed after the live ones |
 | `inbox.auto_archive` | `inbox.auto_archive` | `1d` | a launch whose session has ended goes to the archive by itself after this long (30m, 1d, 7d; off = never); A in the Inbox shows the archive |
 | `inbox.needs_ttl` | `inbox.needs_ttl` | `5m` | a needs-you alert goes to the archive after this long, even while its session still waits (the live Needs-you lists still show it); answered or ended ones go at once (off = only those) |

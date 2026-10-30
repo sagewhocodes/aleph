@@ -581,10 +581,13 @@ impl Host {
     /// A poll answered after `took`.
     fn answered(&mut self, took: Duration) {
         let ms = took.as_secs_f64() * 1000.0;
-        self.rtt_ewma = Some(match self.rtt_ewma {
-            Some(p) => 0.3 * ms + 0.7 * p,
-            None => ms,
-        });
+        // (this computer has no link: a slow answer here is a busy herdr)
+        if !sshcfg::is_local(&self.alias) {
+            self.rtt_ewma = Some(match self.rtt_ewma {
+                Some(p) => 0.3 * ms + 0.7 * p,
+                None => ms,
+            });
+        }
         self.loss *= 0.7;
         let since = *self.healthy_since.get_or_insert_with(Instant::now);
         // a minute of answering earns fast retries again
@@ -1218,7 +1221,7 @@ impl Fleet {
                 h.conn = Conn::Up;
                 h.fetched = Some(t);
                 h.stale = false;
-                h.latency = Some(took);
+                h.latency = (!sshcfg::is_local(alias)).then_some(took);
             }
             // the machine answered, but no herdr server runs there: nothing is
             // running, so there's nothing to show from the cache either
@@ -1233,7 +1236,7 @@ impl Fleet {
                 h.conn = Conn::Down(e);
                 h.fetched = Some(t);
                 h.stale = false;
-                h.latency = Some(took);
+                h.latency = (!sshcfg::is_local(alias)).then_some(took);
             }
             Err(e) => {
                 // the shared connection died under us: the next poll opens a new one
@@ -1528,6 +1531,25 @@ mod tests {
             jitter(Duration::from_secs(10), "a", 3),
             jitter(Duration::from_secs(10), "b", 3)
         );
+    }
+
+    #[test]
+    fn this_computer_has_no_link_to_grade() {
+        // a slow answer from the local herdr is a busy machine, not a bad link
+        let host = |alias: &str| {
+            let mut f = Fleet::placeholder();
+            f.add_host(&Config::in_memory(&["local=false"]), alias);
+            f.hosts.remove(0)
+        };
+        let mut h = host(crate::sshcfg::LOCAL);
+        h.conn = Conn::Up;
+        h.answered(Duration::from_millis(5000));
+        assert_eq!(h.rtt_ewma, None);
+        assert_eq!(h.link(), Link::Up);
+        let mut h = host("b31");
+        h.conn = Conn::Up;
+        h.answered(Duration::from_millis(5000));
+        assert_eq!(h.link(), Link::Degraded);
     }
 
     #[test]

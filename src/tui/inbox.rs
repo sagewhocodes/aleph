@@ -241,6 +241,8 @@ pub(crate) struct State {
     card_cols: usize,
     /// hide rows whose session has ended (`e`)
     hide_ended: bool,
+    /// sessions starting and ending are listed too (`inbox.lifecycle`)
+    lifecycle: bool,
     /// show the archive instead (`A`)
     archive_view: bool,
     /// an ended launch is archived after this many seconds (None: never)
@@ -320,6 +322,7 @@ pub(crate) fn apply_settings(d: &mut Dash) {
     d.inbox.group = Group::parse(&d.cfg.get_or("inbox.group"));
     d.inbox.layout = Layout::parse(&d.cfg.get_or("inbox.layout"));
     d.inbox.hide_ended = d.cfg.flag("inbox.hide_ended");
+    d.inbox.lifecycle = d.cfg.flag("inbox.lifecycle");
     d.inbox.auto_after = match d.cfg.get_or("inbox.auto_archive").trim() {
         "off" | "never" | "" | "0" => None,
         v => crate::log::parse_duration(v).map(|x| x.as_secs()),
@@ -714,6 +717,13 @@ fn archived(d: &Dash, it: &Item, life: Life) -> bool {
         && !launch.is_some_and(|l| d.inbox.kept.contains(&l))
 }
 
+/// Does this filter list it? A session starting or ending is listed only with
+/// `inbox.lifecycle` (your starts are always under Launches).
+fn wanted(d: &Dash, show: Show, it: &Item) -> bool {
+    let lifecycle = matches!(it.e.kind, Kind::New | Kind::Gone);
+    show.keeps_item(it) && (d.inbox.lifecycle || show == Show::Launches || !lifecycle)
+}
+
 /// What the list shows of the timeline: the filters, the archive (or only
 /// it), ended rows unless hidden; a run of identical events folds into one.
 fn timeline(d: &Dash) -> Vec<Item> {
@@ -722,7 +732,7 @@ fn timeline(d: &Dash) -> Vec<Item> {
         .inbox
         .merged
         .iter()
-        .filter(|it| d.inbox.show.keeps_item(it) && kept_item(d, it))
+        .filter(|it| wanted(d, d.inbox.show, it) && kept_item(d, it))
     {
         let lf = life(d, &it.e);
         if archived(d, it, lf) != d.inbox.archive_view
@@ -1958,7 +1968,7 @@ fn draw_filters(d: &mut Dash, f: &mut Frame, r: Rect) {
         .collect();
     for (ci, s) in Show::ALL.into_iter().enumerate() {
         let on = s == d.inbox.show;
-        let n = shown.iter().filter(|it| s.keeps_item(it)).count();
+        let n = shown.iter().filter(|it| wanted(d, s, it)).count();
         // a dot when it holds something unread or live (launches never are)
         let hot = s != Show::Launches
             && (attention(d).iter().any(|e| s.keeps(e.kind) && kept(d, e))

@@ -537,6 +537,7 @@ fn draw_at(v: V, st: &Stats, w: u16, h: u16, r: Rect) -> String {
                 "b31",
                 Color::Rgb(0xd9, 0x77, 0x57),
                 st.updated,
+                &Sub::ALL,
             );
             for (rr, _) in hits {
                 assert!(
@@ -1068,6 +1069,7 @@ fn monitor_strip_targets() {
             "b31",
             Color::Red,
             Some(Instant::now()),
+            &Sub::ALL,
         );
     })
     .unwrap();
@@ -1091,7 +1093,7 @@ fn monitor_strip_targets() {
     // narrow: still every target, short labels
     let mut t = term(40, 1);
     t.draw(|f| {
-        hits = strip(f, f.area(), Sub::Cpu, "b31", Color::Red, None);
+        hits = strip(f, f.area(), Sub::Cpu, "b31", Color::Red, None, &Sub::ALL);
     })
     .unwrap();
     assert_eq!(hits.len(), Sub::ALL.len());
@@ -1609,7 +1611,7 @@ fn monitor_perf() {
                     V::Net => net(f, r, &rich),
                     V::Compact(m) => compact(f, r, "b31", Color::Red, &rich, m, t0),
                     V::Strip => {
-                        strip(f, r, Sub::Cpu, "b31", Color::Red, None);
+                        strip(f, r, Sub::Cpu, "b31", Color::Red, None, &Sub::ALL);
                     }
                     V::Header => header(f, r, "b31", Color::Red, &rich),
                 }

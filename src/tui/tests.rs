@@ -741,6 +741,9 @@ fn inbox_says_whats_alive_and_archives() {
     let mut d = dash_own();
     // finished turns listed, as they were before inbox.finished
     let _ = d.cfg.set("inbox.finished", "all");
+    // sessions starting and ending listed too
+    let _ = d.cfg.set("inbox.lifecycle", "true");
+    inbox::apply_settings(&mut d);
     inbox::apply_settings(&mut d);
     let now = crate::cache::now();
     use crate::events::{Event, Kind};
@@ -882,7 +885,10 @@ fn inbox_dismisses_by_kind_ended_first() {
 
 #[test]
 fn inbox_joins_launches_to_their_events() {
-    let mut d = dash();
+    let mut d = dash_own();
+    // sessions starting and ending listed too
+    let _ = d.cfg.set("inbox.lifecycle", "true");
+    inbox::apply_settings(&mut d);
     let now = crate::cache::now();
     let en = |dt: u64, host: &str, name: &str, agent: &str, dir: &str| crate::history::Entry {
         t: now - dt,
@@ -4355,6 +4361,73 @@ fn a_question_the_hub_archived_leaves_a_running_inbox() {
     inbox::look_again(&mut d);
     d.inbox.seen = now - 100_000;
     assert_eq!(inbox::unread_for(&d, "hub-archive-test"), 0);
+}
+
+#[test]
+fn the_services_page_shows_only_while_looking_for_servers() {
+    use super::monitor_draw::Sub;
+    let mut d = dash_own();
+    let _ = d.cfg.set("services", "off");
+    d.view = View::Monitor;
+    let _ = render(&mut d, 160, 40);
+    assert!(!monitor::pages(&d).contains(&Sub::Services));
+    assert!(!render(&mut d, 160, 40).contains("Services"));
+    // its key, and stepping through the pages, pass it by
+    d.mon.sub = Sub::Net;
+    d.on_key(k(KeyCode::Char('s')));
+    assert_eq!(d.mon.sub, Sub::Net);
+    monitor::sub_step(&mut d, true);
+    assert_eq!(d.mon.sub, Sub::Timeline);
+    monitor::sub_step(&mut d, false);
+    assert_eq!(d.mon.sub, Sub::Net);
+    // the palette doesn't offer it either
+    let p = palette::Palette::new(&d);
+    assert!(!format!("{:?}", p.chosen()).contains("Services"));
+    // on: all of it is back
+    let _ = d.cfg.set("services", "on");
+    assert!(monitor::pages(&d).contains(&Sub::Services));
+    d.on_key(k(KeyCode::Char('s')));
+    assert_eq!(d.mon.sub, Sub::Services);
+    assert!(render(&mut d, 160, 40).contains("Services"));
+    // turned off while it's open: back to the first page, not a dead one
+    let _ = d.cfg.set("services", "off");
+    let _ = render(&mut d, 160, 40);
+    assert_eq!(d.mon.sub, Sub::Fleet);
+}
+
+#[test]
+fn sessions_starting_and_ending_stay_out_of_the_inbox_unless_asked() {
+    use crate::events::{Event, Kind};
+    let now = crate::cache::now();
+    let ev = |name: &str, kind| Event {
+        t: now - 60,
+        host: "b31".into(),
+        name: name.into(),
+        kind,
+        title: format!("{name} title"),
+        agent: "claude".into(),
+        ..Default::default()
+    };
+    let rows = || {
+        vec![
+            ev("startedone", Kind::New),
+            ev("endedone", Kind::Gone),
+            ev("askingone", Kind::Blocked),
+        ]
+    };
+    let mut d = dash_own();
+    let _ = d.cfg.set("inbox.lifecycle", "false");
+    inbox::apply_settings(&mut d);
+    inbox::set_rows(&mut d, rows());
+    d.view = View::Inbox;
+    let s = render(&mut d, 180, 40);
+    assert!(s.contains("askingone"), "{s}");
+    assert!(!s.contains("startedone") && !s.contains("endedone"), "{s}");
+    // asked for: listed as before
+    let _ = d.cfg.set("inbox.lifecycle", "true");
+    inbox::apply_settings(&mut d);
+    let s = render(&mut d, 180, 40);
+    assert!(s.contains("startedone") && s.contains("endedone"), "{s}");
 }
 
 #[test]

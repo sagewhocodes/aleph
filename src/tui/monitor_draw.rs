@@ -118,6 +118,13 @@ impl Sub {
     fn idx(self) -> usize {
         Sub::ALL.iter().position(|s| *s == self).unwrap_or(0)
     }
+    /// The pages to offer: Services only while looking for LLM servers is on.
+    pub fn shown(services: bool) -> Vec<Sub> {
+        Sub::ALL
+            .into_iter()
+            .filter(|s| services || *s != Sub::Services)
+            .collect()
+    }
     pub fn next(self) -> Sub {
         Sub::ALL[(self.idx() + 1) % Sub::ALL.len()]
     }
@@ -1983,6 +1990,7 @@ pub fn strip(
     alias: &str,
     color: Color,
     updated: Option<Instant>,
+    pages: &[Sub],
 ) -> Vec<(Rect, Sub)> {
     let r = area(f, r);
     let mut hits = Vec::new();
@@ -2012,7 +2020,7 @@ pub fn strip(
     let fw = ui::width(&fresh.0);
     let chip_full = 4 + 1 + ui::width(&alias);
     let tabs_w = |v: usize| -> usize {
-        let names: usize = Sub::ALL
+        let names: usize = pages
             .iter()
             .map(|s| match v {
                 0 => ui::width(s.name()),
@@ -2020,7 +2028,7 @@ pub fn strip(
                 _ => 1,
             })
             .sum();
-        names + ui::width(strip_gap(v)) * (Sub::ALL.len() - 1)
+        names + ui::width(strip_gap(v)) * (pages.len().saturating_sub(1))
     };
     // the richest layout that fits: names → short names → letters; freshness goes first
     let mut choice = None;
@@ -2043,7 +2051,7 @@ pub fn strip(
         l.s(" ›", ui::faint());
     }
     l.s("  ", Style::new());
-    for (i, s) in Sub::ALL.iter().enumerate() {
+    for (i, s) in pages.iter().enumerate() {
         if i > 0 {
             l.s(strip_gap(v), ui::faint());
         }

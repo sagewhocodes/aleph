@@ -1312,6 +1312,12 @@ pub const KNOWN: &[Known] = &[
         help: "how the Inbox groups what happened (G switches while you look)",
     },
     Known {
+        key: "inbox.lifecycle",
+        default: "false",
+        kind: Kind::Bool,
+        help: "list sessions starting and ending in the Inbox, and toast a start; off, the Launches filter still has your starts",
+    },
+    Known {
         key: "inbox.hide_ended",
         default: "false",
         kind: Kind::Bool,

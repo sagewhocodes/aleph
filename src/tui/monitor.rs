@@ -49,14 +49,17 @@ fn n_hosts(d: &Dash) -> usize {
 
 /// ⇥ / ⇧⇥: the next / previous view.
 pub(crate) fn sub_step(d: &mut Dash, fwd: bool) {
-    set_sub(
-        d,
-        if fwd {
-            d.mon.sub.next()
-        } else {
-            d.mon.sub.prev()
-        },
-    );
+    let pages = pages(d);
+    let n = pages.len();
+    let i = pages.iter().position(|s| *s == d.mon.sub).unwrap_or(0);
+    let s = pages[if fwd { (i + 1) % n } else { (i + n - 1) % n }];
+    set_sub(d, s);
+}
+
+/// Monitor's pages. Services only while looking for LLM servers is on (or
+/// when there are some to show, as in showcase's demo world).
+pub(crate) fn pages(d: &Dash) -> Vec<Sub> {
+    Sub::shown(d.cfg.flag("services") || !d.services.is_empty())
 }
 
 pub(crate) fn set_sub(d: &mut Dash, s: Sub) {
@@ -164,8 +167,8 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
         }
     }
     match k.code {
-        KeyCode::Left | KeyCode::Char('h') => set_sub(d, d.mon.sub.prev()),
-        KeyCode::Right | KeyCode::Char('l') => set_sub(d, d.mon.sub.next()),
+        KeyCode::Left | KeyCode::Char('h') => sub_step(d, false),
+        KeyCode::Right | KeyCode::Char('l') => sub_step(d, true),
         KeyCode::Char(']') => {
             d.mon.sel = (d.mon.sel + 1) % n;
             super::usage::machine_changed(d);
@@ -178,7 +181,7 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
         KeyCode::Up | KeyCode::Char('k') => d.mon.sel = (d.mon.sel + n - 1) % n,
         KeyCode::Enter if d.mon.sub == Sub::Fleet => set_sub(d, Sub::Overview),
         KeyCode::Char(ch) => {
-            if let Some(s) = Sub::from_key(ch) {
+            if let Some(s) = Sub::from_key(ch).filter(|s| pages(d).contains(s)) {
                 set_sub(d, s);
             }
         }
@@ -308,7 +311,8 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
     let [strip_r, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(r);
     let st: Option<Stats> = d.stats(&alias);
     let updated = st.as_ref().and_then(|s| s.updated);
-    d.mon.hits = md::strip(f, strip_r, d.mon.sub, &alias, color, updated);
+    let shown = pages(d);
+    d.mon.hits = md::strip(f, strip_r, d.mon.sub, &alias, color, updated, &shown);
     let empty = Stats::default();
     if d.mon.sub == Sub::Fleet {
         // every machine's stats, for the table and its charts
@@ -341,6 +345,10 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
     if d.mon.sub == Sub::Usage {
         super::usage::draw(d, f, body);
         return;
+    }
+    // (turned off while it was open: Monitor's first page)
+    if d.mon.sub == Sub::Services && !pages(d).contains(&Sub::Services) {
+        d.mon.sub = Sub::Fleet;
     }
     if d.mon.sub == Sub::Services {
         draw_services(d, f, body);

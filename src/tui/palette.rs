@@ -205,7 +205,8 @@ impl Palette {
         // Monitor's pages: usage, timeline, … and each machine's own (typing
         // its name lists them: "b31 gpu")
         use super::monitor_draw::Sub;
-        for s in Sub::ALL {
+        let pages = super::monitor::pages(d);
+        for s in pages.iter().copied() {
             items.push((
                 Item::Page(None, s),
                 format!("Monitor › {}", s.name()),
@@ -222,7 +223,10 @@ impl Palette {
                 Sub::Procs,
                 Sub::Net,
                 Sub::Services,
-            ] {
+            ]
+            .into_iter()
+            .filter(|s| pages.contains(s))
+            {
                 items.push((
                     Item::Page(Some(h.alias.clone()), s),
                     format!("{} › {}", h.alias, s.name()),

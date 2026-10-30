@@ -45,6 +45,7 @@ pub const PATHS: &[(&str, &str)] = &[
     ("inbox.layout", "inbox.layout"),
     ("inbox.group", "inbox.group"),
     ("inbox.hide_ended", "inbox.hide_ended"),
+    ("inbox.lifecycle", "inbox.lifecycle"),
     ("inbox.auto_archive", "inbox.auto_archive"),
     ("inbox.needs_ttl", "inbox.needs_ttl"),
     ("inbox.down_grace", "inbox.down_grace"),
