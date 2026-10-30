@@ -887,6 +887,25 @@ fn local(o: &mut Out, cfg: &Config) {
             &v(&["brew install herdr   (or: curl -fsSL https://herdr.dev/install.sh | sh)"]),
         ),
     }
+    // running a herdr newer than Aleph knows: what it asks of it may have moved
+    let status = proc::cap(
+        &herdr::bin(),
+        &["status", "server", "--json"],
+        Duration::from_secs(10),
+    );
+    if let Some(p) = herdr::ServerStatus::parse(&status.text())
+        .and_then(|s| s.protocol)
+        .filter(|p| *p != herdr::TESTED_PROTOCOL)
+    {
+        o.warn(
+            "herdr protocol",
+            format!(
+                "herdr speaks protocol {p}, and this Aleph was built for {}",
+                herdr::TESTED_PROTOCOL
+            ),
+            &v(&["aleph self-update, or stay on the herdr you had until there's one for it"]),
+        );
+    }
     match proc::which(&sshcfg::ssh_bin()) {
         Some(_) => {
             let ver = proc::cap(&sshcfg::ssh_bin(), &["-V"], Duration::from_secs(5));

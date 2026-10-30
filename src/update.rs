@@ -410,7 +410,11 @@ pub fn cmd(a: Args) -> ExitCode {
             || yes("A machine runs a newer herdr than this one — update this machine's herdr?"))
     {
         let sp = Spinner::start("Updating herdr here".into());
-        let r = probe::sh(LOCAL, &update_script(), Duration::from_secs(300));
+        let r = probe::sh(
+            LOCAL,
+            &update_script(a.cfg.flag("herdr.update_handoff")),
+            Duration::from_secs(300),
+        );
         sp.stop();
         bad += report(LOCAL, r);
     }
@@ -433,8 +437,9 @@ pub fn cmd(a: Args) -> ExitCode {
                 .iter()
                 .map(|h| {
                     let h = h.clone();
+                    let handoff = a.cfg.flag("herdr.update_handoff");
                     std::thread::spawn(move || {
-                        let r = probe::sh(&h, &update_script(), Duration::from_secs(300));
+                        let r = probe::sh(&h, &update_script(handoff), Duration::from_secs(300));
                         (h, r)
                     })
                 })
@@ -461,8 +466,11 @@ pub fn cmd(a: Args) -> ExitCode {
     }
 }
 
-fn update_script() -> String {
-    "LC_ALL=C; export LC_ALL\nherdr update </dev/null 2>&1 | tail -n 3\nprintf 'CCV\\t%s\\n' \"$(herdr --version 2>/dev/null | head -n 1)\"\n".to_string()
+/// `handoff`: herdr moves its running server to the new version live, so sessions
+/// carry on (`herdr.update_handoff`).
+fn update_script(handoff: bool) -> String {
+    let how = if handoff { " --handoff" } else { "" };
+    format!("LC_ALL=C; export LC_ALL\nherdr update{how} </dev/null 2>&1 | tail -n 3\nprintf 'CCV\\t%s\\n' \"$(herdr --version 2>/dev/null | head -n 1)\"\n")
 }
 
 /// Print the outcome of an update; 1 if it failed.
@@ -497,6 +505,12 @@ fn report(h: &str, r: Result<crate::proc::Out, String>) -> usize {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_live_handoff_only_when_asked_for() {
+        assert!(update_script(true).contains("herdr update --handoff </dev/null"));
+        assert!(update_script(false).contains("herdr update </dev/null"));
+    }
+
     use super::*;
 
     #[test]

@@ -236,6 +236,7 @@ dashboard's Settings tab edits them. Per-machine settings are `host.<alias>.<key
 | `close.exited` | `sessions.close_exited` | `close` (close \| keep) | when an agent or terminal exits by itself: its window closes and you go back where you came from, and its pane closes if Aleph opened it and only its shell is left running (close); or it all stays, saying it ended (keep) |
 | `log.level` | `log.level` | `info` (error \| warn \| info \| debug) | what goes into the log (aleph logs): info = machines down/up, reconnects, answers sent, failures; debug adds every external command |
 | `fleet.board_order` | `fleet.board_order` | `needs` (needs \| working \| recent \| machine) | Fleet's board (the machines list maximised with z): each machine's sessions needs you first, working first, the most recent change first, or in herdr's order; , steps through them there |
+| `herdr.update_handoff` | `herdr.update_handoff` | `false` (on/off) | aleph update moves a machine's running herdr to the new version live (herdr update --handoff), so sessions carry on without a restart |
 | `update_repo` | `updates.repo` | — | GitHub owner/repo that publishes releases, for self-update |
 | `update_pubkey` | `updates.pubkey` | — | the minisign public key releases are signed with (RW…): with it, self-update installs only a release whose SHA256SUMS.minisig it verifies |
 

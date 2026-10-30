@@ -602,6 +602,15 @@ pub(crate) fn view(d: &Dash, f: &mut Frame, r: Rect, alias: &str) -> Vec<(Rect, 
             ui::fg(c::YELLOW()),
         ));
     }
+    if let Some(p) = h.untested_protocol() {
+        addr.push(Span::styled(
+            format!(
+                " · herdr protocol {p}, Aleph knows {}",
+                crate::herdr::TESTED_PROTOCOL
+            ),
+            ui::fg(c::YELLOW()),
+        ));
+    }
     left.push(Line::from(addr));
     if let Conn::Down(e) = &h.conn {
         left.push(Line::raw(""));

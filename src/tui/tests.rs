@@ -244,6 +244,7 @@ fn blocked_session_shows_question_box() {
         "b31|w1:p2".into(),
         Ok("hello".into()),
         Some(" Do you want to run this?\n ❯ 1. Yes\n   2. No".into()),
+        None,
     );
     let s = render(&mut d, 140, 36);
     assert!(s.contains("is asking"), "{s}");
@@ -6612,6 +6613,78 @@ fn focus_side_panel_draws_the_conversation() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(d.tv.scroll, 0);
+}
+
+#[test]
+fn a_web_address_is_found_under_a_click() {
+    use super::wall::url_at;
+    let line = "see https://example.com/docs?a=1, then (http://b.example/x) or /etc/hosts";
+    let at = |w: &str| line.find(w).unwrap();
+    assert_eq!(
+        url_at(line, at("example.com")).as_deref(),
+        Some("https://example.com/docs?a=1"),
+        "the comma after it isn't part of it"
+    );
+    assert_eq!(
+        url_at(line, at("b.example")).as_deref(),
+        Some("http://b.example/x"),
+        "nor the bracket"
+    );
+    assert_eq!(
+        url_at(line, at("hosts")),
+        None,
+        "a path isn't a web address"
+    );
+    assert_eq!(url_at(line, at(" then")), None, "the space between");
+    assert_eq!(url_at(line, 500), None, "past the end");
+}
+
+#[test]
+fn an_idle_sessions_screen_is_read_again_only_when_it_changed() {
+    let mut d = dash();
+    d.on_key(k(KeyCode::Char('j')));
+    let s = crate::tui::fleet::selected_session(&d).unwrap();
+    let key = s.key();
+    let rev = Some(7);
+    let set = |d: &mut Dash, status: &str, revision: Option<u64>| {
+        for h in &mut d.fleet.hosts {
+            for x in &mut h.sessions {
+                if x.key() == key {
+                    x.status = status.into();
+                    x.revision = revision;
+                }
+            }
+        }
+    };
+    let aged = |d: &mut Dash, revision: Option<u64>, ago: u64| {
+        d.fv.on_preview(key.clone(), Ok("x".into()), None, revision);
+        d.fv.previews.get_mut(&key).unwrap().at = Instant::now() - Duration::from_secs(ago);
+        d.fv.want = Some((key.clone(), Instant::now() - Duration::from_secs(5)));
+        d.fv.busy = false;
+    };
+    // idle, read 5 s ago, the same revision: no need
+    set(&mut d, "idle", rev);
+    aged(&mut d, rev, 5);
+    crate::tui::fleet::pump(&mut d);
+    assert!(!d.fv.busy, "nothing changed");
+    // it moved: read it
+    aged(&mut d, Some(6), 5);
+    crate::tui::fleet::pump(&mut d);
+    assert!(d.fv.busy, "the screen changed");
+    // not moved, but long enough ago: read it anyway
+    aged(&mut d, rev, 30);
+    crate::tui::fleet::pump(&mut d);
+    assert!(d.fv.busy, "a slow look, in case");
+    // working: every second, whatever its revision says
+    set(&mut d, "working", rev);
+    aged(&mut d, rev, 5);
+    crate::tui::fleet::pump(&mut d);
+    assert!(d.fv.busy, "a working agent's screen stays live");
+    // a herdr that doesn't say: as before
+    set(&mut d, "idle", None);
+    aged(&mut d, None, 5);
+    crate::tui::fleet::pump(&mut d);
+    assert!(d.fv.busy, "no revision to go by");
 }
 
 #[test]

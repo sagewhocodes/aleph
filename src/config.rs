@@ -1662,6 +1662,12 @@ pub const KNOWN: &[Known] = &[
         help: "the dashboard's four-card tour after setup: done once seen (empty shows it again after aleph setup)",
     },
     Known {
+        key: "herdr.update_handoff",
+        default: "false",
+        kind: Kind::Bool,
+        help: "aleph update moves a machine's running herdr to the new version live (herdr update --handoff), so sessions carry on without a restart",
+    },
+    Known {
         key: "update_repo",
         default: "",
         kind: Kind::Text,

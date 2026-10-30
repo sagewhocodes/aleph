@@ -51,6 +51,8 @@ pub struct Session {
     pub seq: u64,
     /// herdr's `completion_seq`: rises every time the agent finishes
     pub done_seq: u64,
+    /// herdr's `revision`: rises every time its screen changes
+    pub revision: Option<u64>,
     /// `interactive_ready`: the agent can take input right now
     pub ready: Option<bool>,
     /// `launch_pending`: herdr is still starting the agent in this pane
@@ -168,6 +170,8 @@ pub struct ServerStatus {
     pub version: Option<String>,
     /// can this herdr client talk to that server (`None` when not running)
     pub compatible: Option<bool>,
+    /// the protocol it speaks
+    pub protocol: Option<u64>,
     pub restart_needed: bool,
     /// the installed binary is newer than the running server
     pub binary_stale: bool,
@@ -181,6 +185,7 @@ impl ServerStatus {
             running: v.get("running").and_then(Value::as_bool).unwrap_or(false),
             version: v.get("version").and_then(Value::as_str).map(String::from),
             compatible: v.get("compatible").and_then(Value::as_bool),
+            protocol: v.get("protocol").and_then(Value::as_u64),
             restart_needed: v
                 .get("restart_needed")
                 .and_then(Value::as_bool)
@@ -192,6 +197,13 @@ impl ServerStatus {
         })
     }
 }
+
+/// herdr's private protocol Aleph is built and tested against (its socket's methods
+/// and their fields: `tests/fixtures/herdr/methods.txt`).
+pub const TESTED_PROTOCOL: u64 = 22;
+
+/// How long a poll waits on the live forward before going over ssh instead.
+const T_FORWARD: Duration = Duration::from_secs(4);
 
 /// Separates the two JSON documents of a combined poll.
 const SEP: &str = "@@aleph@@";
@@ -664,6 +676,18 @@ impl Herdr {
         };
         if let Some(e) = crate::showcase::not_here() {
             return Err(e);
+        }
+        // the event listener's forward already goes there: no new process, no ssh
+        // command. Anything wrong with it, ssh answers instead
+        if let Some(Ok(v)) = crate::sock::over_forward(
+            &self.ssh,
+            "session.snapshot",
+            serde_json::json!({}),
+            T_FORWARD,
+        ) {
+            if let Some(x) = split(&serde_json::json!({ "result": v })) {
+                return Ok(x);
+            }
         }
         if self.via_ssh() {
             let h = sh_quote(&crate::chan::herdr_path(&self.ssh));
@@ -2240,6 +2264,7 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
             done_seq: m.get("completion_seq").and_then(Value::as_u64).unwrap_or(0),
+            revision: m.get("revision").and_then(Value::as_u64),
             ready: m.get("interactive_ready").and_then(Value::as_bool),
             launch_pending: m
                 .get("launch_pending")
@@ -2293,6 +2318,7 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
                 crate::agents::SHELL.into()
             },
             plain: !ours,
+            revision: m.get("revision").and_then(Value::as_u64),
             ..Default::default()
         });
     }

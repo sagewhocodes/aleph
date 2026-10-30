@@ -261,6 +261,13 @@ impl Host {
     pub fn os(&self) -> &str {
         self.herdr_info.as_ref().map_or("", |i| i.os.as_str())
     }
+    /// The protocol its herdr speaks, when it's one Aleph wasn't built against.
+    pub fn untested_protocol(&self) -> Option<u64> {
+        self.herdr_info
+            .as_ref()
+            .and_then(|i| i.protocol)
+            .filter(|p| *p != herdr::TESTED_PROTOCOL)
+    }
     /// herdr there asks for a restart (or runs an older binary than installed).
     pub fn herdr_restart(&self) -> bool {
         self.herdr_info.as_ref().is_some_and(|i| i.restart)
@@ -411,6 +418,7 @@ fn herdr_version_of(h: &Herdr, alias: &str) -> Option<HerdrInfo> {
             version,
             os,
             compatible: Some(true),
+            protocol: None,
             restart: false,
         });
     }
@@ -435,6 +443,7 @@ fn herdr_version_of(h: &Herdr, alias: &str) -> Option<HerdrInfo> {
             version: s.version.or_else(|| h.version()).unwrap_or_default(),
             os,
             compatible: s.compatible,
+            protocol: s.protocol,
             restart: s.restart_needed || s.binary_stale,
         },
         _ => HerdrInfo {
@@ -445,6 +454,7 @@ fn herdr_version_of(h: &Herdr, alias: &str) -> Option<HerdrInfo> {
             },
             os,
             compatible: None,
+            protocol: None,
             restart: false,
         },
     };
@@ -484,13 +494,15 @@ pub struct HerdrInfo {
     pub os: String,
     /// from the running server; None = not running / older herdr
     pub compatible: Option<bool>,
+    /// the protocol the running server speaks
+    pub protocol: Option<u64>,
     /// restart needed, or the installed binary is newer than the server
     pub restart: bool,
 }
 
 impl HerdrInfo {
     fn to_json(&self) -> Value {
-        json!({"version": self.version, "os": self.os, "compatible": self.compatible, "restart": self.restart})
+        json!({"version": self.version, "os": self.os, "compatible": self.compatible, "protocol": self.protocol, "restart": self.restart})
     }
     fn from_json(v: &Value) -> Option<HerdrInfo> {
         Some(HerdrInfo {
@@ -501,6 +513,7 @@ impl HerdrInfo {
                 .unwrap_or("")
                 .to_string(),
             compatible: v.get("compatible").and_then(Value::as_bool),
+            protocol: v.get("protocol").and_then(Value::as_u64),
             restart: v.get("restart").and_then(Value::as_bool).unwrap_or(false),
         })
     }
@@ -1725,6 +1738,8 @@ impl Fleet {
                 "herdr_drift": h.drift().is_some(),
                 "herdr_compatible": h.herdr_info.as_ref().and_then(|i| i.compatible),
                 "herdr_restart_needed": h.herdr_restart(),
+                "herdr_protocol": h.herdr_info.as_ref().and_then(|i| i.protocol),
+                "herdr_protocol_untested": h.untested_protocol().is_some(),
                 // `Linux · Ubuntu 24.04.3 LTS` (from the herdr check): what a machine is, before anything else asks
                 "os": Some(h.os()).filter(|o| !o.is_empty()),
                 "sessions": h.sessions.iter().map(|s| {
@@ -1765,6 +1780,7 @@ pub(crate) fn session_from_json(v: &Value) -> Option<Session> {
         return None;
     }
     Some(Session {
+        revision: None,
         host: s("host"),
         pane_id: pane,
         tab_id: s("tab_id"),

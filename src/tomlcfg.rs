@@ -52,6 +52,7 @@ pub const PATHS: &[(&str, &str)] = &[
     ("inbox.machine_back", "inbox.machine_back"),
     ("inbox.finished", "inbox.finished"),
     // stats and services
+    ("herdr.update_handoff", "herdr.update_handoff"),
     ("stats", "stats.mode"),
     ("stats_interval", "stats.interval"),
     ("stats_window", "stats.window"),

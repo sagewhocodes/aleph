@@ -2854,10 +2854,139 @@ fn draw_selection(d: &mut Dash, f: &mut Frame) {
     }
 }
 
+/// A click (ctrl or cmd) on a tile's screen, waiting for what herdr says is there.
+pub(crate) struct LinkAsk {
+    pane: u32,
+    /// the row and column on the pane's own screen
+    row: u16,
+    col: u16,
+}
+
+/// The web address at `col` of a line: where a terminal's own link detection would
+/// find one, for a pane herdr can't be asked about (pure — tested).
+pub(crate) fn url_at(line: &str, col: usize) -> Option<String> {
+    let chars: Vec<char> = line.chars().collect();
+    if col >= chars.len() || chars[col].is_whitespace() {
+        return None;
+    }
+    let ends = |c: char| c.is_whitespace() || "\"'<>`|".contains(c);
+    let mut a = col;
+    while a > 0 && !ends(chars[a - 1]) {
+        a -= 1;
+    }
+    let mut b = col;
+    while b + 1 < chars.len() && !ends(chars[b + 1]) {
+        b += 1;
+    }
+    let word: String = chars[a..=b].iter().collect();
+    let at = word.find("http://").or_else(|| word.find("https://"))?;
+    let url = word[at..].trim_end_matches(['.', ',', ';', ':', ')', ']', '}', '!', '?']);
+    Some(url.to_string())
+}
+
+/// ctrl or cmd + click on a tile: what's a link there opens on this computer. herdr
+/// is asked off the UI thread; true when it's a tile's screen (the click stops here).
+fn link_click(d: &mut Dash, m: &MouseEvent) -> bool {
+    let inside = |r: &Rect| {
+        m.column >= r.x && m.column < r.x + r.width && m.row >= r.y && m.row < r.y + r.height
+    };
+    let Some((pane, area)) = d
+        .wall
+        .rects
+        .iter()
+        .map(|(id, r)| (*id, inner_of(*r)))
+        .find(|(_, r)| inside(r))
+    else {
+        return false;
+    };
+    let Some(st) = d.wall.panes.get(&pane).and_then(|p| p.stream.as_ref()) else {
+        return false;
+    };
+    let Some((row, col)) = st.viewport_cell(area, m.column, m.row) else {
+        // a scrolled copy of its history: only the words on screen to go by
+        let y = m.row;
+        let line = st.text_between(
+            area,
+            (area.x, y),
+            (area.x + area.width.saturating_sub(1), y),
+        );
+        let found = url_at(&line, (m.column - area.x) as usize);
+        open_link(d, found);
+        return true;
+    };
+    let (host, target) = (st.host.clone(), st.pane.clone());
+    let tx = d.tx.clone();
+    std::thread::spawn(move || {
+        let params = serde_json::json!({"pane_id": target, "viewport_row": row, "col": col});
+        let regions = crate::sock::request(&host, "pane.link.resolve", params).map(|v| {
+            v.get("regions")
+                .and_then(serde_json::Value::as_array)
+                .map(|rs| {
+                    rs.iter()
+                        .filter_map(|r| {
+                            let n = |k: &str| {
+                                r.get(k)
+                                    .and_then(serde_json::Value::as_u64)
+                                    .and_then(|x| u16::try_from(x).ok())
+                            };
+                            Some((n("row")?, n("start_col")?, n("end_col")?))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        });
+        let _ = tx.send(super::Bg::LinkAt(LinkAsk { pane, row, col }, regions));
+    });
+    true
+}
+
+/// herdr's answer to a click: the text of those cells is the address. A herdr that
+/// couldn't be asked: what's on screen at the click.
+pub(crate) fn link_answer(
+    d: &mut Dash,
+    ask: LinkAsk,
+    regions: Result<Vec<(u16, u16, u16)>, String>,
+) {
+    let Some(st) = d.wall.panes.get(&ask.pane).and_then(|p| p.stream.as_ref()) else {
+        return;
+    };
+    let found = match regions {
+        Ok(rs) if !rs.is_empty() => {
+            let text: String = rs
+                .iter()
+                .map(|(row, a, b)| st.viewport_text(*row, *a, *b))
+                .collect();
+            Some(text.trim().to_string())
+        }
+        Ok(_) => None,
+        Err(_) => url_at(
+            &st.viewport_text(ask.row, 0, u16::MAX - 1),
+            ask.col as usize,
+        ),
+    };
+    open_link(d, found);
+}
+
+fn open_link(d: &mut Dash, url: Option<String>) {
+    match url.map(|u| crate::proc::open_url(&u).map(|()| u)) {
+        Some(Ok(u)) => d.note(format!("opened {u}")),
+        Some(Err(e)) => d.toast(Level::Warn, e),
+        None => d.note("no link there"),
+    }
+}
+
 pub(crate) fn mouse(d: &mut Dash, m: MouseEvent) {
     let at = |r: &Rect| {
         m.column >= r.x && m.column < r.x + r.width && m.row >= r.y && m.row < r.y + r.height
     };
+    if m.kind == MouseEventKind::Down(MouseButton::Left)
+        && m.modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
+        && link_click(d, &m)
+    {
+        d.wall.swallow_up = true;
+        return;
+    }
     // the pane you're typing into, if the mouse is over its screen: clicks
     // go to the agent (herdr drops them unless it asked for the mouse)
     let typing_in = d
@@ -3814,7 +3943,7 @@ pub(crate) fn cheatsheet(d: &Dash, f: &mut Frame, area: Rect) {
         ),
         row(
             "drag",
-            "select across a pane, copied when you let go (focus.copy_on_select; option+drag goes to the agent)",
+            "select across a pane, copied when you let go (focus.copy_on_select; option+drag goes to the agent) · ctrl or cmd + click opens a link",
         ),
         row(
             "ctrl+q",

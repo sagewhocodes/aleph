@@ -574,6 +574,30 @@ pub fn exec<S: AsRef<OsStr>>(prog: impl AsRef<OsStr>, args: &[S]) -> io::Error {
     Command::new(prog).args(args).exec()
 }
 
+/// Open a web address on this computer: the browser, left running on its own
+/// (`ALEPH_OPEN_CMD` stands in, for tests). Nothing but http and https: what a
+/// screen shows can be anything.
+pub fn open_url(url: &str) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(format!("not opening {url}: only web addresses"));
+    }
+    let prog = crate::brand::env("OPEN_CMD").unwrap_or_else(|| {
+        if cfg!(target_os = "macos") {
+            "open".to_string()
+        } else {
+            "xdg-open".to_string()
+        }
+    });
+    Command::new(prog)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("couldn't open {url}: {e}"))
+}
+
 pub fn which(name: &str) -> Option<PathBuf> {
     if name.contains('/') {
         let p = PathBuf::from(name);
@@ -622,6 +646,19 @@ pub fn sh_quote(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_web_addresses_open() {
+        for bad in [
+            "file:///etc/passwd",
+            "ssh://x",
+            "javascript:alert(1)",
+            "/etc/hosts",
+            "",
+        ] {
+            assert!(open_url(bad).is_err(), "{bad}");
+        }
+    }
+
     use super::*;
 
     #[test]

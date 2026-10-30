@@ -282,6 +282,23 @@ impl Stream {
         trim_lines(&s.contents_between(r1 + top, c1, r2 + top, c2 + 1))
     }
 
+    /// Where a point of `area` is on the pane's own screen, as herdr counts it: (row,
+    /// column). None while it shows a scrolled copy of its history.
+    pub fn viewport_cell(&self, area: Rect, col: u16, row: u16) -> Option<(u16, u16)> {
+        if self.back.lock().unwrap().up > 0 {
+            return None;
+        }
+        let p = self.parser.lock().unwrap();
+        let top = (content_bottom(p.screen()) + 1).saturating_sub(area.height);
+        Some((row.saturating_sub(area.y) + top, col.saturating_sub(area.x)))
+    }
+
+    /// A row of the pane's own screen, those columns both included.
+    pub fn viewport_text(&self, row: u16, from: u16, to: u16) -> String {
+        let p = self.parser.lock().unwrap();
+        p.screen().contents_between(row, from, row, to + 1)
+    }
+
     /// The agent asked for application cursor keys (as far as its frames say).
     pub fn app_cursor(&self) -> bool {
         self.parser.lock().unwrap().screen().application_cursor()

@@ -105,6 +105,7 @@ aleph doctor                         # check everything
 | `ctrl+q` | Keys back to Aleph, then back to Fleet |
 | `[ ]` · `ctrl+[ ]` | Previous / next session, on any machine · machine (or `( )`) |
 | Drag | Select across a pane; copied when you let go (option+drag goes to the agent) |
+| Ctrl or Cmd + click | Open a web link in a pane, on this computer |
 | `?` | Every key |
 
 ## 💻 From the shell

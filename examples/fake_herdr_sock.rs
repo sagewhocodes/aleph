@@ -308,6 +308,40 @@ fn handle(host: &str, method: &str, p: &Value) -> Result<Value, (String, String)
     let _g = STATE.lock().unwrap_or_else(|e| e.into_inner());
     match method {
         "ping" => Ok(json!({"type": "pong", "version": "0.9.5", "protocol": 22})),
+        // the same world `api snapshot` shows, unless this machine is an older herdr
+        "session.snapshot" if !old => {
+            let read = |f: String| -> Value {
+                std::fs::read_to_string(st().join(f))
+                    .ok()
+                    .and_then(|t| serde_json::from_str(&t).ok())
+                    .unwrap_or(Value::Null)
+            };
+            let panes = match read(format!("panes_{host}.json")) {
+                Value::Null => json!([]),
+                v => v,
+            };
+            Ok(json!({"type": "session_snapshot", "snapshot": {
+                "version": "0.9.5", "protocol": 22,
+                "agents": read(format!("agents_{host}.json")).pointer("/result/agents").cloned().unwrap_or(json!([])),
+                "tabs": read(format!("tabs_{host}.json")).pointer("/result/tabs").cloned().unwrap_or(json!([])),
+                "panes": panes,
+            }}))
+        }
+        // $ST/link_<host>: `row start end` of the link wherever you click
+        "pane.link.resolve" => {
+            let regions: Vec<Value> = std::fs::read_to_string(st().join(format!("link_{host}")))
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|l| {
+                    let n: Vec<u64> = l
+                        .split_whitespace()
+                        .filter_map(|x| x.parse().ok())
+                        .collect();
+                    (n.len() == 3).then(|| json!({"row": n[0], "start_col": n[1], "end_col": n[2]}))
+                })
+                .collect();
+            Ok(json!({"type": "pane_link_resolved", "regions": regions}))
+        }
         "notification.show" => {
             if s("title").is_none() {
                 return Err(bad("invalid request: missing field `title`".into()));

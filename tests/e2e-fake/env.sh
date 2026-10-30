@@ -39,3 +39,5 @@ export ALEPH_SECRETS_FILE=1
 export ALEPH_TAB_CMD=$ROOT/bin/fake-tab
 # "open in editor" runs bin/fake-editor (it logs), never a real editor app
 export ALEPH_EDITOR_CMD="$ROOT/bin/fake-editor {remote} {path}"
+# never a browser under the fake HOME: a link opens here
+export ALEPH_OPEN_CMD="$ROOT/bin/fake-editor"

@@ -14,6 +14,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const PREVIEW_REFRESH: Duration = Duration::from_secs(1);
+/// A session that isn't working, whose screen herdr says hasn't changed, isn't read
+/// again for this long.
+const PREVIEW_STILL: Duration = Duration::from_secs(20);
 const PREVIEW_DELAY: Duration = Duration::from_millis(180);
 const PREVIEW_LINES: usize = 400;
 
@@ -36,6 +39,8 @@ pub(crate) struct Preview {
     pub text: String,
     pub detect: Option<String>,
     pub at: Instant,
+    /// its pane's revision when it was read
+    pub revision: Option<u64>,
 }
 
 /// How long a first `Z` waits for the second.
@@ -49,8 +54,8 @@ pub struct State {
     pub filter: String,
     pub filtering: bool,
     pub(crate) previews: HashMap<String, Preview>,
-    want: Option<(String, Instant)>,
-    busy: bool,
+    pub(crate) want: Option<(String, Instant)>,
+    pub(crate) busy: bool,
     select_first: Option<String>,
     /// the machine panel's mode (v cycles): resources · GPU · processes
     pub stats_mode: u8,
@@ -94,6 +99,7 @@ impl State {
         key: String,
         recent: Result<String, String>,
         detect: Option<String>,
+        revision: Option<u64>,
     ) {
         self.busy = false;
         let text = recent.as_deref().map(strip_ansi).unwrap_or_default();
@@ -104,6 +110,7 @@ impl State {
                 text,
                 detect,
                 at: Instant::now(),
+                revision,
             },
         );
     }
@@ -408,10 +415,16 @@ pub(crate) fn pump(d: &mut Dash) {
         _ => d.fv.want = Some((key.clone(), Instant::now())),
     }
     let since = d.fv.want.as_ref().map(|x| x.1).unwrap_or(d.t0);
-    let fresh =
-        d.fv.previews
-            .get(&key)
-            .is_some_and(|p| p.at.elapsed() < PREVIEW_REFRESH);
+    let still =
+        |p: &Preview| p.revision.is_some() && p.revision == s.revision && s.status != "working";
+    let fresh = d.fv.previews.get(&key).is_some_and(|p| {
+        p.at.elapsed()
+            < if still(p) {
+                PREVIEW_STILL
+            } else {
+                PREVIEW_REFRESH
+            }
+    });
     if d.fv.busy || fresh || since.elapsed() < PREVIEW_DELAY {
         return;
     }
@@ -437,6 +450,7 @@ pub(crate) fn pump(d: &mut Dash) {
             key,
             recent,
             detect,
+            revision: s.revision,
         });
     });
 }

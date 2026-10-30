@@ -206,6 +206,11 @@ pub fn open(host: &str) -> Result<Link, Fail> {
 impl Link {
     /// One request (a connection of its own: herdr answers one per connection).
     pub fn call(&self, method: &str, params: Value) -> Result<Value, Fail> {
+        self.call_within(method, params, Duration::from_secs(10))
+    }
+
+    /// `call`, waiting this long for the answer.
+    fn call_within(&self, method: &str, params: Value, wait: Duration) -> Result<Value, Fail> {
         let id = format!(
             "aleph-{}-{}",
             std::process::id(),
@@ -213,7 +218,7 @@ impl Link {
         );
         let mut s = UnixStream::connect(&self.path)
             .map_err(|e| Fail::Unreachable(format!("herdr's socket: {e}")))?;
-        let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
+        let _ = s.set_read_timeout(Some(wait));
         let _ = s.set_write_timeout(Some(Duration::from_secs(5)));
         // herdr acts on a whole line only: a failed write never half-happens
         s.write_all(line(&id, method, &params).as_bytes())
@@ -234,6 +239,30 @@ impl Link {
             "herdr closed the connection without answering".into(),
         ))
     }
+}
+
+/// One request over the event listener's forward, if it's up (`None`: it isn't, go
+/// another way). Never opens a connection of its own: for what can as well run
+/// over ssh, and quick, because an ssh that died can hold a forward open.
+pub fn over_forward(
+    host: &str,
+    method: &str,
+    params: Value,
+    wait: Duration,
+) -> Option<Result<Value, Fail>> {
+    if crate::showcase::not_here().is_some() || sshcfg::is_local(host) {
+        return None;
+    }
+    let path = listen::local_forward_path(host);
+    if !path.exists() {
+        return None;
+    }
+    let link = Link {
+        host: host.to_string(),
+        path,
+        _fwd: Forward(None),
+    };
+    Some(link.call_within(method, params, wait))
 }
 
 /// A toast in herdr's own UI on `host` (where someone is attached) — the

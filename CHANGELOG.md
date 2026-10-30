@@ -2,6 +2,17 @@
 
 ## 2.1.0 — in progress
 
+### herdr
+- **Polls use the connection that's already open.** Where Aleph already listens to a machine's events, its session list comes
+  over that, with no new command on the machine. If that's unavailable, ssh answers as before.
+- **Fewer reads of a screen that hasn't changed.** The selected session's preview was read every second. One that isn't
+  working and hasn't changed, by herdr's own count, is now read every 20 s. A working one stays live.
+- **ctrl or cmd + click opens a link in a tile,** on this computer, whichever machine the session runs on. Web addresses only.
+  It goes by what's shown, so a link labelled with something other than its address won't open.
+- **Aleph says when a herdr speaks a protocol it wasn't built for:** in the doctor, on the machine's line, and once as a toast.
+- **`herdr.update_handoff`** makes `aleph update` move a running herdr to the new version live, so sessions carry on. Off by
+  default.
+
 ### Raycast
 - **Picking the extension in `aleph setup` installs it,** with no commands to copy and no checkout of Aleph needed. It comes
   from this version's release, checked against its checksum (and signature, with `update_pubkey`), then builds and imports

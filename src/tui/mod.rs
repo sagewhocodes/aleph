@@ -277,7 +277,11 @@ pub(crate) enum Bg {
         key: String,
         recent: Result<String, String>,
         detect: Option<String>,
+        /// its pane's revision as it was read
+        revision: Option<u64>,
     },
+    /// what's at a click in a tile (ctrl or cmd): herdr's answer
+    LinkAt(wall::LinkAsk, Result<Vec<(u16, u16, u16)>, String>),
     /// an action finished: toast it, and re-poll `refresh` if given
     Done {
         ok: bool,
@@ -802,6 +806,23 @@ impl Dash {
             .filter(|h| !self.drift_told.contains(&h.alias))
             .filter_map(|h| h.drift().map(|(t, o)| (h.alias.clone(), t, o)))
             .collect();
+        let untested: Vec<(String, u64)> = self
+            .fleet
+            .hosts
+            .iter()
+            .filter(|h| !self.drift_told.contains(&h.alias))
+            .filter_map(|h| h.untested_protocol().map(|p| (h.alias.clone(), p)))
+            .collect();
+        for (a, p) in untested {
+            self.drift_told.insert(a.clone());
+            self.toast(
+                Level::Warn,
+                format!(
+                    "{a}'s herdr speaks protocol {p}, and this Aleph was built for {}: some things may not work",
+                    crate::herdr::TESTED_PROTOCOL
+                ),
+            );
+        }
         for (a, theirs, ours) in new {
             self.drift_told.insert(a.clone());
             self.toast(
@@ -1204,7 +1225,9 @@ impl Dash {
                 key,
                 recent,
                 detect,
-            } => self.fv.on_preview(key, recent, detect),
+                revision,
+            } => self.fv.on_preview(key, recent, detect, revision),
+            Bg::LinkAt(ask, regions) => wall::link_answer(self, ask, regions),
             Bg::Quick { host, gen, ws, wt } => {
                 if let Mode::Quick(q) = &mut self.mode {
                     if q.host == host && q.gen == gen {

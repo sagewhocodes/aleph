@@ -674,7 +674,7 @@ pub(crate) fn lines(d: &Dash) -> Vec<Line<'static>> {
         ),
         (
             "drag",
-            "select across a pane, copied when you let go (focus.copy_on_select); option+drag goes to the agent",
+            "select across a pane, copied when you let go (focus.copy_on_select); option+drag goes to the agent; ctrl or cmd + click opens a link",
         ),
         (
             "n · S · a",
