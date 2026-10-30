@@ -451,6 +451,7 @@ fn to_session(s: &world::Sess) -> Session {
             crate::limits::detect(&screens::plain(&screens::lines(s, m, 0, 120).join("\n")))
         });
     Session {
+        revision: None,
         host: s.host.clone(),
         pane_id: s.pane.clone(),
         tab_id: s.tab.clone(),
@@ -681,6 +682,7 @@ pub fn new_tab(host: &str, o: &NewOpts) -> Result<(Vec<Started>, Vec<String>), S
 pub fn server_status(host: &str) -> Option<ServerStatus> {
     let m = up_now(host).ok()?;
     Some(ServerStatus {
+        protocol: Some(crate::herdr::TESTED_PROTOCOL),
         running: true,
         version: Some(m.herdr.to_string()),
         compatible: Some(true),
