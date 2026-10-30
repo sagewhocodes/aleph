@@ -78,7 +78,7 @@ pub struct Turn {
 }
 
 /// One prompt and the work it led to.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct Prompt {
     pub key: String,
     /// u you · a an agent · s the agent itself · "" before any prompt in the logs
@@ -94,7 +94,7 @@ pub struct Prompt {
 }
 
 /// The agent, or a subagent beside it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct Lane {
     /// "" the agent itself
     pub id: String,
@@ -109,7 +109,7 @@ pub struct Lane {
 }
 
 /// A session.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct Tree {
     pub host: String,
     pub agent: String,
@@ -610,6 +610,28 @@ pub fn rows(tree: &Tree, mode: Fold, toggled: &HashMap<String, bool>, running: b
     out
 }
 
+/// A compaction's row under its prompt.
+fn compact_row(pid: &str, depth: u8, lane: &str, t: u64, before: u64, after: u64) -> Row {
+    Row {
+        id: format!("{pid}/C{t}"),
+        depth: depth + 1,
+        kind: RowKind::Compact,
+        label: format!(
+            "compacted · {} → {}",
+            crate::usage::dash::tokens(before),
+            crate::usage::dash::tokens(after)
+        ),
+        start: t,
+        end: t,
+        sums: Sums::default(),
+        foldable: false,
+        folded: false,
+        bad: false,
+        lane: lane.to_string(),
+        key: String::new(),
+    }
+}
+
 fn lane_rows(
     tree: &Tree,
     lane: &Lane,
@@ -665,6 +687,10 @@ fn lane_rows(
             key: p.key.clone(),
         });
         if !o {
+            // the context changed here: that shows even with its prompt folded
+            for (t, before, after) in &p.compactions {
+                out.push(compact_row(&pid, depth, &lane.id, *t, *before, *after));
+            }
             continue;
         }
         let sigs: Vec<String> = p.turns.iter().map(signature).collect();
@@ -751,24 +777,7 @@ fn lane_rows(
         for (t, before, after) in &p.compactions {
             chunks.push((
                 *t,
-                vec![Row {
-                    id: format!("{pid}/C{t}"),
-                    depth: depth + 1,
-                    kind: RowKind::Compact,
-                    label: format!(
-                        "compacted · {} → {}",
-                        crate::usage::dash::tokens(*before),
-                        crate::usage::dash::tokens(*after)
-                    ),
-                    start: *t,
-                    end: *t,
-                    sums: Sums::default(),
-                    foldable: false,
-                    folded: false,
-                    bad: false,
-                    lane: lane.id.clone(),
-                    key: String::new(),
-                }],
+                vec![compact_row(&pid, depth, &lane.id, *t, *before, *after)],
             ));
         }
         for (t, kind) in &p.errors {
@@ -1480,6 +1489,26 @@ mod tests {
             lane: lane.into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_compaction_shows_under_a_folded_prompt() {
+        let tree = Tree {
+            lanes: vec![Lane {
+                prompts: vec![Prompt {
+                    start: 1_000,
+                    end: 9_000,
+                    compactions: vec![(5_000, 150_000, 30_000)],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let rows = rows(&tree, Fold::Folded, &HashMap::new(), false);
+        let kinds: Vec<RowKind> = rows.iter().map(|r| r.kind).collect();
+        assert_eq!(kinds, vec![RowKind::Prompt, RowKind::Compact]);
+        assert!(rows[1].label.contains("compacted"), "{}", rows[1].label);
     }
 
     #[test]

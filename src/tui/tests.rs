@@ -6315,10 +6315,106 @@ fn fleet_g_shows_the_conversation_in_the_preview() {
     });
     let s = render(&mut d, 140, 36);
     assert_eq!(s.matches("› Read").count(), 4, "{s}");
-    // G again: recent output back
+    // G again: the whole turn view; leaving it, recent output again
     d.on_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE));
+    assert!(matches!(d.mode, Mode::Turns));
+    d.on_key(k(KeyCode::Esc));
+    assert!(matches!(d.mode, Mode::Normal));
     let s = render(&mut d, 140, 36);
     assert!(!s.contains("Read + 3 more"), "{s}");
+}
+
+/// The turn view from Focus: fold all, expand all, fold one, by key and by a click
+/// on the panel; a compaction stays in sight with its prompt folded.
+#[test]
+fn the_turn_view_folds_all_expands_all_and_one_at_a_time() {
+    let mut d = dash();
+    d.fleet.host_mut("b31").unwrap().sessions[0].native_id = Some("conv-3".into());
+    let mut tree = tl_tree("conv-3");
+    let ms = tree.lanes[0].prompts[0].start + 1000;
+    tree.lanes[0].prompts[0]
+        .compactions
+        .push((ms, 150_000, 30_000));
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    leave_typing(&mut d);
+    d.on_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE));
+    assert!(matches!(d.mode, Mode::Turns));
+    super::tree_view::set_tree(&mut d, tree);
+    let s = render(&mut d, 140, 36);
+    assert!(
+        s.contains("Turns") && s.contains("fold · expand all"),
+        "{s}"
+    );
+    assert!(!s.contains("turn view"), "already in it: {s}");
+    // z: a line per prompt, the compaction still there
+    d.on_key(k(KeyCode::Char('z')));
+    let s = render(&mut d, 140, 36);
+    assert!(s.contains("▸ prompt 1"), "{s}");
+    assert!(s.contains("compacted · 150k → 30k"), "{s}");
+    assert!(!s.contains("› Read"), "{s}");
+    // Z: everything
+    d.on_key(k(KeyCode::Char('Z')));
+    let s = render(&mut d, 140, 36);
+    assert_eq!(s.matches("› Read").count(), 4, "{s}");
+    assert!(s.contains("compacted · 150k → 30k"), "{s}");
+    // enter: only the one under the cursor
+    d.on_key(k(KeyCode::Enter));
+    let s = render(&mut d, 140, 36);
+    assert!(s.contains("▸ prompt 1") && !s.contains("› Read"), "{s}");
+    d.on_key(k(KeyCode::Enter));
+    assert_eq!(render(&mut d, 140, 36).matches("› Read").count(), 4);
+    // esc: back in Focus, where it was
+    d.on_key(k(KeyCode::Esc));
+    assert!(matches!(d.mode, Mode::Normal));
+    assert_eq!(d.view, View::Wall);
+    // the panel beside it has the same, to click (typing or not)
+    let s = render(&mut d, 180, 40);
+    let click = |d: &mut Dash, s: &str, word: &str| {
+        let y = s.lines().position(|l| l.contains(word)).expect(word);
+        let line = s.lines().nth(y).unwrap();
+        let x = line[..line.find(word).unwrap()].chars().count() as u16;
+        d.on_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: x + 1,
+            row: y as u16,
+            modifiers: KeyModifiers::NONE,
+        });
+    };
+    click(&mut d, &s, "fold all");
+    let s = render(&mut d, 180, 40);
+    assert!(s.contains("▸ prompt 1"), "{s}");
+    click(&mut d, &s, "expand all");
+    let s = render(&mut d, 180, 40);
+    assert!(s.contains("┌ prompt 1"), "{s}");
+    click(&mut d, &s, "turn view");
+    assert!(matches!(d.mode, Mode::Turns));
+    d.on_key(k(KeyCode::Esc));
+    // compacting right now shows before the log can say so
+    d.fleet.host_mut("b31").unwrap().sessions[0].compacting = true;
+    d.on_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE));
+    assert!(render(&mut d, 140, 36).contains("compacting now"));
+}
+
+/// A session compacting has its own colour on the strips, and counts as busy.
+#[test]
+fn compacting_has_its_own_state_on_the_strips() {
+    use crate::statelog::St;
+    let mut s = crate::herdr::Session {
+        status: "working".into(),
+        ..Default::default()
+    };
+    assert_eq!(St::of(&s), St::Working);
+    s.compacting = true;
+    assert_eq!(St::of(&s), St::Compacting);
+    assert_eq!(St::parse(St::Compacting.as_str()), Some(St::Compacting));
+    assert!(St::Compacting.busy() && St::Working.busy() && !St::Idle.busy());
+    let cells = super::timechart::cells(&[(0, 100, St::Compacting)], 0, 100, 4);
+    assert_eq!(cells[0], Some(St::Compacting));
+    let legend: String = super::timechart::legend()
+        .iter()
+        .map(|x| x.content.to_string())
+        .collect();
+    assert!(legend.contains("compacting"), "{legend}");
 }
 
 #[test]
@@ -6377,16 +6473,16 @@ fn monitor_timeline_lists_earlier_conversations_and_shows_their_tree() {
         s.contains("1 failed") && !s.contains("Read + 3 more"),
         "{s}"
     );
-    // t: the keys are the tree's; enter opens the prompt; esc gives them back
+    // t: the turn view, with its keys; enter opens the prompt; esc comes back
     d.on_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
-    assert!(d.tl.tree_keys);
+    assert!(matches!(d.mode, Mode::Turns));
     d.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let s = render(&mut d, 200, 50);
     assert!(
         s.contains("┌ prompt 1 · you") && s.contains("Read + 3 more"),
         "{s}"
     );
-    assert!(s.contains("esc  the list"), "{s}");
+    assert!(s.contains("esc  back"), "{s}");
     d.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     let s = render(&mut d, 200, 50);
     assert!(s.contains("▸ prompt 1 · you"), "{s}");
@@ -6401,15 +6497,12 @@ fn monitor_timeline_lists_earlier_conversations_and_shows_their_tree() {
     let s = render(&mut d, 200, 50);
     assert_eq!(s.matches("› Read").count(), 4, "all open: {s}");
     d.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert!(!d.tl.tree_keys);
+    assert!(matches!(d.mode, Mode::Normal));
     assert_eq!(d.view, View::Monitor);
-    // narrow: the list alone, the tree in its place on t
+    // narrow: the list alone, the whole turn view on t
     let s = render(&mut d, 120, 32);
     assert!(!s.contains("Conversation ·"), "{s}");
     d.on_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE));
     let s = render(&mut d, 120, 32);
-    assert!(
-        s.contains("Conversation ·") && !s.contains("earlier ·"),
-        "{s}"
-    );
+    assert!(s.contains("Turns") && !s.contains("earlier ·"), "{s}");
 }

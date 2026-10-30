@@ -2,11 +2,15 @@
 //! panel — Fleet's right panel (`T`), Focus's side, Monitor › Timeline.
 //! Loaded off the UI thread, again every few seconds while it's on screen
 //! (and its machine's logs asked to be read then too), folds kept per
-//! session. The wheel scrolls it, a click folds or opens a row; in Monitor ›
-//! Timeline the keys too: j/k, PgUp/PgDn, enter/space fold, ← → close /
-//! open, z / Z everything, v by session › by prompt › every step (what ran
-//! under each, counted), ( ) prompts, e the next error, f follows the end, w
-//! words (read live from the machine, never kept).
+//! session. The wheel scrolls it, a click folds or opens a row, and its top line
+//! has fold all, expand all and the turn view to click.
+//!
+//! The turn view (`Mode::Turns`: `t` in Monitor › Timeline, `G` in Focus, `G`
+//! again in Fleet) is the same tree taking the whole screen, with its keys:
+//! j/k, PgUp/PgDn, enter/space fold one, ← → close / open, z fold all, Z expand
+//! all, v by session › by prompt › every step (what ran under each, counted),
+//! ( ) prompts, e the next error, f follows the end, w words (read live from
+//! the machine, never kept).
 
 use super::Dash;
 use crate::timeline::{self, Fold, Row, RowKind, Tree};
@@ -54,6 +58,17 @@ pub(crate) struct State {
     nudged: Option<Instant>,
     /// last drawn: so a frame that doesn't draw it stops the reloads
     pub drawn: Option<Instant>,
+    /// what the turn view calls it
+    pub title: String,
+    /// its top line, to click
+    buttons: Vec<(Rect, Button)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Button {
+    FoldAll,
+    ExpandAll,
+    TurnView,
 }
 
 impl State {
@@ -86,6 +101,36 @@ pub(crate) fn show(d: &mut Dash, host: &str, agent: &str, session: &str, running
     d.tv.words.clear();
     d.tv.words_for = None;
     d.tv.at = None;
+}
+
+/// The whole turn view of this conversation, with its keys.
+pub(crate) fn open_full(
+    d: &mut Dash,
+    host: &str,
+    agent: &str,
+    session: &str,
+    running: bool,
+    title: String,
+) {
+    show(d, host, agent, session, running);
+    d.tv.title = title;
+    d.mode = super::Mode::Turns;
+}
+
+/// The turn view of a live session. Not every one has a conversation to show:
+/// it says so, and false.
+pub(crate) fn open_session(d: &mut Dash, s: &crate::herdr::Session) -> bool {
+    let Some(id) = s.native_id.clone() else {
+        d.note(if s.agent == crate::agents::SHELL {
+            "a terminal has no turns: t shows the commands it ran"
+        } else {
+            "no turns to show yet: its agent hasn't said which conversation it is"
+        });
+        return false;
+    };
+    let title = format!("{} · {}", s.display(), crate::agents::label(&s.agent));
+    open_full(d, &s.host, &s.agent, &id, s.status == "working", title);
+    true
 }
 
 /// Every frame: take what was loaded; load again when due and it's on screen.
@@ -154,10 +199,34 @@ pub(crate) fn pump(d: &mut Dash) {
 }
 
 fn rows(d: &Dash) -> Vec<Row> {
-    match &d.tv.tree {
+    let mut v = match &d.tv.tree {
         Some(t) => timeline::rows(t, d.tv.mode(&d.cfg), &d.tv.toggled, d.tv.running),
         None => Vec::new(),
+    };
+    // compacting right now, by its screen: the log says so once it's over
+    if let Some((host, _, id)) = &d.tv.key {
+        let now = d.fleet.sessions().iter().any(|s| {
+            s.compacting && s.host == *host && s.native_id.as_deref() == Some(id.as_str())
+        });
+        if now {
+            let ms = crate::cache::now() * 1000;
+            v.push(Row {
+                id: "compacting-now".into(),
+                depth: 0,
+                kind: RowKind::Compact,
+                label: "compacting now…".into(),
+                start: ms,
+                end: ms,
+                sums: Default::default(),
+                foldable: false,
+                folded: false,
+                bad: false,
+                lane: String::new(),
+                key: String::new(),
+            });
+        }
     }
+    v
 }
 
 fn glyph(r: &Row) -> &'static str {
@@ -219,6 +288,19 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect, focused: bool) {
         );
         return;
     }
+    // its top line, when there's room: what the keys do, to click
+    let r = if r.height >= 5 {
+        top_line(d, f, r, focused);
+        Rect {
+            y: r.y + 1,
+            height: r.height - 1,
+            ..r
+        }
+    } else {
+        d.tv.buttons.clear();
+        r
+    };
+    let Some(tree) = &d.tv.tree else { return };
     let all = rows(d);
     let n = all.len();
     let h = r.height as usize;
@@ -258,7 +340,8 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect, focused: bool) {
         } else {
             match row.kind {
                 RowKind::Prompt | RowKind::Lane => ui::bold(),
-                RowKind::PromptEnd | RowKind::Compact => ui::muted(),
+                RowKind::PromptEnd => ui::muted(),
+                RowKind::Compact => ui::fg(c::MAUVE()),
                 RowKind::Group => ui::fg(c::ACCENT()),
                 _ => Style::new(),
             }
@@ -268,7 +351,14 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect, focused: bool) {
             gutter,
             Span::styled(if w >= 40 { clock } else { String::new() }, ui::faint()),
             Span::raw(indent),
-            Span::styled(glyph(row), ui::fg(c::ACCENT())),
+            Span::styled(
+                glyph(row),
+                ui::fg(if row.kind == RowKind::Compact {
+                    c::MAUVE()
+                } else {
+                    c::ACCENT()
+                }),
+            ),
             Span::styled(row.label.clone(), st),
         ];
         // the figures in what the label leaves (the counts give way first)
@@ -321,6 +411,99 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect, focused: bool) {
     let _ = k;
 }
 
+/// The tree's top line: fold all, expand all, and from a panel the turn view.
+fn top_line(d: &mut Dash, f: &mut Frame, r: Rect, focused: bool) {
+    let mut items = vec![
+        (Button::FoldAll, "▸ fold all"),
+        (Button::ExpandAll, "▾ expand all"),
+    ];
+    if !focused {
+        items.push((Button::TurnView, "↗ turn view"));
+    }
+    let mut x = r.x + 1;
+    let mut spans = vec![Span::raw(" ")];
+    d.tv.buttons.clear();
+    for (b, label) in items {
+        let w = ui::width(label) as u16;
+        if x + w > r.x + r.width {
+            break;
+        }
+        d.tv.buttons.push((
+            Rect {
+                x,
+                y: r.y,
+                width: w,
+                height: 1,
+            },
+            b,
+        ));
+        spans.push(Span::styled(label, ui::muted()));
+        spans.push(Span::raw("   "));
+        x += w + 3;
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), Rect { height: 1, ..r });
+}
+
+/// The turn view: the tree on the whole screen, with its keys.
+pub(crate) fn draw_full(d: &mut Dash, f: &mut Frame, area: Rect) {
+    ui::clear(f, area);
+    let mode = match d.tv.mode(&d.cfg) {
+        Fold::Smart => "smart",
+        Fold::Open => "open",
+        Fold::Folded => "folded",
+    };
+    let block = ui::panel(
+        Line::from(vec![
+            Span::raw(" Turns "),
+            Span::styled(format!("· {} ", d.tv.title), ui::muted()),
+            Span::styled(format!("· {mode} "), ui::faint()),
+        ]),
+        true,
+    );
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.height < 2 {
+        return;
+    }
+    let body = Rect {
+        height: inner.height - 1,
+        ..inner
+    };
+    draw(d, f, body, true);
+    let foot = Rect {
+        y: inner.y + inner.height - 1,
+        height: 1,
+        ..inner
+    };
+    let mut h = hints();
+    h.push(("esc", "back"));
+    f.render_widget(Paragraph::new(ui::hints_fit(&h, foot.width)), foot);
+}
+
+/// Everything down to a line per prompt, with any compaction still showing.
+fn fold_all(d: &mut Dash) {
+    d.tv.follow = false;
+    d.tv.level = 1;
+    fold_to(d, 1);
+}
+
+/// Everything open, level by level.
+fn expand_all(d: &mut Dash) {
+    d.tv.level = 2;
+    d.tv.toggled.insert("L".into(), true);
+    for _ in 0..8 {
+        let now = rows(d);
+        let mut more = false;
+        for r in now.iter().filter(|r| r.foldable && r.folded) {
+            d.tv.toggled.insert(r.id.clone(), true);
+            more = true;
+        }
+        if !more {
+            break;
+        }
+    }
+}
+
 /// Fold the tree to a level: 0 each session (and subagent) on a line, 1 each
 /// prompt, 2 every step open.
 fn fold_to(d: &mut Dash, level: u8) {
@@ -369,6 +552,29 @@ fn toggle(d: &mut Dash, i: usize) {
 
 /// The mouse over the panel (true: it was there).
 pub(crate) fn mouse(d: &mut Dash, m: &MouseEvent) -> bool {
+    let fresh =
+        d.tv.drawn
+            .is_some_and(|t| t.elapsed() <= Duration::from_secs(1));
+    if fresh && matches!(m.kind, MouseEventKind::Down(_)) {
+        let hit =
+            d.tv.buttons
+                .iter()
+                .find(|(r, _)| m.column >= r.x && m.column < r.x + r.width && m.row == r.y);
+        if let Some((_, b)) = hit {
+            match *b {
+                Button::FoldAll => fold_all(d),
+                Button::ExpandAll => expand_all(d),
+                Button::TurnView => {
+                    if let Some((host, agent, id)) = d.tv.key.clone() {
+                        let running = d.tv.running;
+                        let title = crate::agents::label(&agent);
+                        open_full(d, &host, &agent, &id, running, title);
+                    }
+                }
+            }
+            return true;
+        }
+    }
     let Some(r) = d.tv.area else { return false };
     let inside =
         m.column >= r.x && m.column < r.x + r.width && m.row >= r.y && m.row < r.y + r.height;
@@ -460,25 +666,8 @@ pub(crate) fn key(d: &mut Dash, k: &KeyEvent) -> bool {
                 ][level as usize],
             );
         }
-        KeyCode::Char('z') => {
-            for r in all.iter().filter(|r| r.foldable) {
-                d.tv.toggled.insert(r.id.clone(), false);
-            }
-        }
-        KeyCode::Char('Z') => {
-            // open each level: again until nothing new opens
-            for _ in 0..6 {
-                let now = rows(d);
-                let mut more = false;
-                for r in now.iter().filter(|r| r.foldable && r.folded) {
-                    d.tv.toggled.insert(r.id.clone(), true);
-                    more = true;
-                }
-                if !more {
-                    break;
-                }
-            }
-        }
+        KeyCode::Char('z') => fold_all(d),
+        KeyCode::Char('Z') => expand_all(d),
         KeyCode::Char(')') => {
             if let Some(i) = all
                 .iter()
@@ -554,8 +743,8 @@ pub(crate) fn key(d: &mut Dash, k: &KeyEvent) -> bool {
 pub(crate) fn hints() -> Vec<(&'static str, &'static str)> {
     vec![
         ("j k", "move"),
-        ("enter", "fold"),
-        ("z Z", "all"),
+        ("enter", "fold one"),
+        ("z Z", "fold · expand all"),
         ("v", "by session · prompt · step"),
         ("( )", "prompts"),
         ("e", "next error"),

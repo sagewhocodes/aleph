@@ -937,6 +937,14 @@ pub(crate) fn run_act(d: &mut Dash, act: Act) -> Option<Handoff> {
         }
         Act::Timeline => super::timechart::toggle_rows(d),
         Act::TimelinePanel => {
+            // on, then the whole turn view (leaving that: its recent output again)
+            if d.fv.timeline_panel {
+                if let Some(s) = sess.clone() {
+                    d.fv.timeline_panel = false;
+                    super::tree_view::open_session(d, &s);
+                    return None;
+                }
+            }
             d.fv.timeline_panel = !d.fv.timeline_panel;
             d.toast(
                 Level::Info,

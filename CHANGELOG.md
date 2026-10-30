@@ -2,6 +2,14 @@
 
 ## 2.1.0 — in progress
 
+### Timeline
+- **A turn view:** a conversation's prompts, turns and tool calls on the whole screen, with its keys. `t` in Monitor ›
+  Timeline, `G` in Focus and `G` again in Fleet, or click "turn view" on any timeline panel.
+- **Fold all, expand all, or one at a time:** `z`, `Z` and enter, or click them on the panel's top line, even while you're
+  typing into the agent. Fold all leaves a line per prompt.
+- **Compactions show.** They stay visible with their prompt folded, say how far the context shrank, and one in progress
+  says so at once. Session strips have a colour of their own for it, and it counts as busy time.
+
 ### Leaving things
 - **When an agent or a terminal exits, its window closes and you go back where you came from.** It used to leave you on an
   empty pane, or on some other window that happened to be open. `x` on the last pane does the same. `close.exited = keep`

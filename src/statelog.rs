@@ -40,6 +40,8 @@ pub enum St {
     Done,
     Idle,
     Limit,
+    /// compacting its conversation: at work, and worth seeing apart
+    Compacting,
 }
 
 impl St {
@@ -47,6 +49,9 @@ impl St {
     pub fn of(s: &Session) -> St {
         if s.limit.is_some() {
             return St::Limit;
+        }
+        if s.compacting {
+            return St::Compacting;
         }
         match s.status.as_str() {
             "working" => St::Working,
@@ -62,7 +67,12 @@ impl St {
             St::Done => "done",
             St::Idle => "idle",
             St::Limit => "limit",
+            St::Compacting => "compacting",
         }
+    }
+    /// At work: a compaction counts as much as a turn does.
+    pub fn busy(self) -> bool {
+        matches!(self, St::Working | St::Compacting)
     }
     pub fn parse(s: &str) -> Option<St> {
         Some(match s {
@@ -71,14 +81,16 @@ impl St {
             "done" => St::Done,
             "idle" => St::Idle,
             "limit" => St::Limit,
+            "compacting" => St::Compacting,
             _ => return None,
         })
     }
     /// Which one a chart cell shows when several share it (time being equal).
     pub fn rank(self) -> u8 {
         match self {
-            St::Needs => 4,
-            St::Limit => 3,
+            St::Needs => 5,
+            St::Limit => 4,
+            St::Compacting => 3,
             St::Working => 2,
             St::Done => 1,
             St::Idle => 0,

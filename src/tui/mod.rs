@@ -346,6 +346,8 @@ pub(crate) enum Mode {
     Palette(palette::Palette),
     /// the prompt library (ctrl+p)
     Prompts(promptlib::PromptLib),
+    /// a conversation's whole turn view (`tree_view`)
+    Turns,
     Help(help::Help),
     Quick(quick::QuickStart),
     CloseList(quick::CloseList),
@@ -1462,6 +1464,13 @@ impl Dash {
                 };
             }
             Mode::Prompts(lib) => return promptlib::key(self, lib, k),
+            Mode::Turns => {
+                if !matches!(k.code, KeyCode::Esc | KeyCode::Char('q' | 't' | 'G')) {
+                    self.mode = Mode::Turns;
+                    tree_view::key(self, &k);
+                }
+                return None;
+            }
             Mode::NewForm(mut nf) => {
                 if key_str(&k) == "ctrl+p" {
                     forms::form_prompts(self, nf);
@@ -1717,15 +1726,6 @@ impl Dash {
             // too many must not close the dashboard)
             KeyCode::Char('q') if self.view == View::Fleet && !ctrl => return Some(Handoff::Quit),
             KeyCode::Char('q') if self.view == View::Fleet => return None,
-            // Monitor › Timeline's tree gives its keys back first
-            KeyCode::Esc
-                if self.view == View::Monitor
-                    && self.mon.sub == monitor_draw::Sub::Timeline
-                    && self.tl.tree_keys =>
-            {
-                self.tl.tree_keys = false;
-                return None;
-            }
             KeyCode::Esc | KeyCode::Char('q') if self.view != View::Fleet => {
                 if self.view == View::Wall {
                     return wall::on_key(self, k);
@@ -2021,6 +2021,10 @@ impl Dash {
         if matches!(self.mode, Mode::Approvals) {
             approvals::draw(self, f, area);
         }
+        // (it draws by the state it keeps, so it can't be borrowed from the mode)
+        if matches!(self.mode, Mode::Turns) {
+            tree_view::draw_full(self, f, area);
+        }
         match &self.mode {
             Mode::Normal | Mode::Approvals => {}
             Mode::Confirm { title, text, .. } => {
@@ -2042,6 +2046,7 @@ impl Dash {
             Mode::HostForm(hf) => hf.draw(f, area),
             Mode::Palette(p) => p.draw(f, area, self.t0),
             Mode::Prompts(lib) => promptlib::draw(self, lib, f, area),
+            Mode::Turns => {}
             Mode::Help(h) => help::draw(self, f, area, h),
             Mode::Quick(q) => q.draw(self, f, area),
             Mode::Command(cl) => cl.draw(self, f, area),
@@ -3313,7 +3318,7 @@ pub(crate) const ACTS: &[(Act, &str, &str, &str)] = &[
         Act::TimelinePanel,
         "timeline_panel",
         "G",
-        "the selected session's timeline in the right panel — its prompts, turns, tool calls and subagents, with time, tokens and $ (again: its recent output)",
+        "the selected session's timeline in the right panel: prompts, turns, tool calls and compactions, with time, tokens and $; again: the whole turn view, with its keys",
     ),
     (
         Act::Alerts,

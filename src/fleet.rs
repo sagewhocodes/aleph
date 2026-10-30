@@ -1215,10 +1215,17 @@ impl Fleet {
                         }
                     }
                     let compacting = &self.compacting;
+                    let mut moved = false;
                     if let Some(h) = self.hosts.iter_mut().find(|h| h.alias == alias) {
                         for s in h.sessions.iter_mut() {
-                            s.compacting = s.status == "working" && compacting.contains(&s.key());
+                            let now = s.status == "working" && compacting.contains(&s.key());
+                            moved |= now != s.compacting;
+                            s.compacting = now;
                         }
+                    }
+                    // (the state log writes on a change)
+                    if moved {
+                        self.changed_at = Instant::now();
                     }
                 }
                 Msg::Limits { alias, found } => {

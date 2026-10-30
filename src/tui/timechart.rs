@@ -42,8 +42,6 @@ pub(crate) struct State {
     pub sel: usize,
     pub scroll: usize,
     pub hide_ended: bool,
-    /// the selected conversation's tree has the keys (`t`; esc gives them back)
-    pub tree_keys: bool,
     /// the conversations of the last weeks (`timeline::sessions`), read off
     /// the UI thread while it's shown
     pub hist: Vec<crate::timeline::Brief>,
@@ -143,8 +141,9 @@ pub(crate) fn cells(v: &[(u64, u64, St)], from: u64, to: u64, n: usize) -> Vec<O
         St::Done => 2,
         St::Idle => 3,
         St::Limit => 4,
+        St::Compacting => 5,
     };
-    let mut acc = vec![[0f64; 5]; n];
+    let mut acc = vec![[0f64; 6]; n];
     for &(s, e, st) in v {
         let (s, e) = (s.max(from), e.min(to));
         if e <= s {
@@ -161,7 +160,14 @@ pub(crate) fn cells(v: &[(u64, u64, St)], from: u64, to: u64, n: usize) -> Vec<O
             }
         }
     }
-    const ALL: [St; 5] = [St::Working, St::Needs, St::Done, St::Idle, St::Limit];
+    const ALL: [St; 6] = [
+        St::Working,
+        St::Needs,
+        St::Done,
+        St::Idle,
+        St::Limit,
+        St::Compacting,
+    ];
     acc.iter()
         .map(|a| {
             let seen: f64 = a.iter().sum();
@@ -188,6 +194,7 @@ pub(crate) fn look(st: St) -> (&'static str, Color) {
         St::Working => ("█", c::WORKING()),
         St::Needs => (if mono { "▓" } else { "█" }, c::NEEDS()),
         St::Limit => (if mono { "▒" } else { "█" }, c::LIMIT()),
+        St::Compacting => (if mono { "░" } else { "█" }, c::MAUVE()),
         St::Done => ("▄", c::DONE()),
         St::Idle => ("▁", c::IDLE()),
     }
@@ -201,6 +208,7 @@ fn word(st: St) -> &'static str {
         St::Done => "done",
         St::Idle => "idle",
         St::Limit => "at limit",
+        St::Compacting => "compacting",
     }
 }
 
@@ -292,7 +300,14 @@ pub(crate) fn axis(from: u64, to: u64, w: usize, tz: i64) -> String {
 /// `█ working  █ needs you  ▄ done  ▁ idle  █ at limit`
 pub(crate) fn legend() -> Vec<Span<'static>> {
     let mut v = Vec::new();
-    for st in [St::Working, St::Needs, St::Done, St::Idle, St::Limit] {
+    for st in [
+        St::Working,
+        St::Compacting,
+        St::Needs,
+        St::Done,
+        St::Idle,
+        St::Limit,
+    ] {
         let (g, col) = look(st);
         v.push(Span::styled(format!("{g} "), ui::fg(col)));
         v.push(Span::styled(format!("{}  ", word(st)), ui::faint()));
@@ -514,7 +529,7 @@ fn tally(v: &[(u64, u64, St)], from: u64, to: u64) -> (u64, usize) {
     let mut asks = 0;
     for &(s, e, st) in v {
         let (a, b) = (s.max(from), e.min(to));
-        if st == St::Working && b > a {
+        if st.busy() && b > a {
             busy += b - a;
         }
         if st == St::Needs && s >= from && s <= to {
@@ -527,27 +542,9 @@ fn tally(v: &[(u64, u64, St)], from: u64, to: u64) -> (u64, usize) {
 /// Keys of Monitor › Timeline; false when it isn't one of them.
 pub(crate) fn monitor_key(d: &mut Dash, k: KeyEvent) -> bool {
     let (from, _) = window(d);
-    if d.tl.tree_keys {
-        if matches!(k.code, KeyCode::Esc | KeyCode::Char('t')) {
-            d.tl.tree_keys = false;
-            return true;
-        }
-        if super::tree_view::key(d, &k) {
-            return true;
-        }
-    }
     let n = picks(&rows(d, from)).len();
     match k.code {
-        KeyCode::Char('t') => {
-            let v = rows(d, from);
-            let p = picks(&v);
-            let row = p.get(d.tl.sel).and_then(|i| v.get(*i));
-            if row.and_then(|r| conversation(d, r)).is_some() {
-                d.tl.tree_keys = true;
-            } else {
-                d.note("no conversation to show for it: its agent didn't say which (or it's not one Aleph reads)");
-            }
-        }
+        KeyCode::Char('t') => open_turns(d, from),
         // [ ]: session by session, round and round
         KeyCode::Char(']') if n > 0 && super::machine_step(&k).is_none() => {
             d.tl.sel = (d.tl.sel + 1) % n
@@ -596,7 +593,7 @@ pub(crate) fn monitor_key(d: &mut Dash, k: KeyEvent) -> bool {
                     super::wall::focus_on(d, &key, super::View::Monitor);
                 }
                 Some(Row::Ended { .. }) => d.note("it has ended — its story is in the Inbox (4)"),
-                Some(Row::Past(_)) => d.tl.tree_keys = true,
+                Some(Row::Past(_)) => open_turns(d, from),
                 _ => {}
             }
         }
@@ -605,17 +602,28 @@ pub(crate) fn monitor_key(d: &mut Dash, k: KeyEvent) -> bool {
     true
 }
 
-pub(crate) fn monitor_hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
-    if d.tl.tree_keys {
-        let mut v = super::tree_view::hints();
-        v.push(("esc", "the list"));
-        return v;
+/// `t`: the selected conversation's whole turn view.
+fn open_turns(d: &mut Dash, from: u64) {
+    let v = rows(d, from);
+    let p = picks(&v);
+    let row = p.get(d.tl.sel).and_then(|i| v.get(*i));
+    match row.and_then(|r| conversation(d, r)) {
+        Some((host, agent, session, running)) => {
+            let title = crate::agents::label(&agent);
+            super::tree_view::open_full(d, &host, &agent, &session, running, title);
+        }
+        None => d.note(
+            "no conversation to show for it: its agent didn't say which (or it's not one Aleph reads)",
+        ),
     }
+}
+
+pub(crate) fn monitor_hints(_d: &Dash) -> Vec<(&'static str, &'static str)> {
     vec![
         ("↑↓ [ ]", "session"),
         ("ctrl+[ ]", "machine"),
         ("enter", "focus"),
-        ("t", "its timeline"),
+        ("t", "turn view"),
         ("+ -", "hours"),
         ("e", "ended"),
         ("←→", "view"),
@@ -637,9 +645,6 @@ pub(crate) fn draw_monitor(d: &mut Dash, f: &mut Frame, r: Rect) {
         .get(d.tl.sel)
         .and_then(|i| v.get(*i))
         .and_then(|row| conversation(d, row));
-    if pick.is_none() {
-        d.tl.tree_keys = false;
-    }
     let (r, side) = if r.width >= 140 {
         let lw = r.width - (r.width * 2 / 5).clamp(60, 90);
         (
@@ -650,8 +655,6 @@ pub(crate) fn draw_monitor(d: &mut Dash, f: &mut Frame, r: Rect) {
                 ..r
             }),
         )
-    } else if d.tl.tree_keys {
-        (Rect::default(), Some(r))
     } else {
         (r, None)
     };
@@ -672,7 +675,7 @@ pub(crate) fn draw_monitor(d: &mut Dash, f: &mut Frame, r: Rect) {
             ui::faint(),
         ));
     }
-    let block = ui::panel(Line::from(title), !d.tl.tree_keys);
+    let block = ui::panel(Line::from(title), true);
     let inner = block.inner(r);
     f.render_widget(block, r);
     if inner.height < 3 || inner.width < 30 {
@@ -881,7 +884,7 @@ fn draw_conversation(
         };
         title.push(Span::styled(format!("· {m} "), ui::faint()));
     }
-    let block = ui::panel(Line::from(title), d.tl.tree_keys);
+    let block = ui::panel(Line::from(title), false);
     let inner = block.inner(r);
     f.render_widget(block, r);
     let Some((host, agent, session, running)) = pick else {
@@ -899,7 +902,7 @@ fn draw_conversation(
         return;
     };
     super::tree_view::show(d, host, agent, session, *running);
-    let body = if d.tl.tree_keys || inner.height < 4 {
+    let body = if inner.height < 4 {
         inner
     } else {
         // a line saying how to get its keys
@@ -910,7 +913,7 @@ fn draw_conversation(
         };
         f.render_widget(
             Paragraph::new(Span::styled(
-                "t: its keys · the wheel scrolls, a click folds",
+                "t: the turn view, with its keys · the wheel scrolls, a click folds",
                 ui::faint(),
             )),
             hint,
@@ -920,7 +923,7 @@ fn draw_conversation(
             ..inner
         }
     };
-    super::tree_view::draw(d, f, body, d.tl.tree_keys);
+    super::tree_view::draw(d, f, body, false);
 }
 
 /// `3h 10m busy · ▲ 4`, `w` wide.

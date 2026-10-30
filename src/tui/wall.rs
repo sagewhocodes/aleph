@@ -2235,6 +2235,12 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
             let s = sess?;
             super::fleet::note_box(d, &s);
         }
+        // the whole turn view of the session in this pane
+        KeyCode::Char('G') => {
+            if let Some(s) = focused_session(d) {
+                super::tree_view::open_session(d, &s);
+            }
+        }
         KeyCode::Char('t') if d.wall.in_focus() => {
             // it flips what's on screen (a wide screen shows it before any t)
             let w = d.wall.body_w;
@@ -3031,6 +3037,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
             ("i", "message"),
             ("y", "approve"),
             ("t", "timeline"),
+            ("G", "turns"),
             ("[ ]", "session"),
             ("{ }", "needs you"),
             ("O", "new tab"),
@@ -3819,6 +3826,7 @@ pub(crate) fn cheatsheet(d: &Dash, f: &mut Frame, area: Rect) {
             "esc esc",
             "esc to the agent: it stops its work (the first is held back · focus.esc_guard)",
         ),
+        row("t · G", "the timeline at the side · the whole turn view"),
         row("Q · X", "its queue · close the session"),
         row("n · S", "new session here · new shell"),
         row("a", "add an existing session (in an empty pane)"),

@@ -251,12 +251,11 @@ pub fn fresh(host: &str, t: u64) -> bool {
 /// The state log's working stretch of `e`'s session that ended as it
 /// finished (when the event doesn't say how long it worked).
 fn stretch_of(e: &Event) -> Option<(u64, u64)> {
-    use crate::statelog::St;
     crate::statelog::read_from(&crate::statelog::file())
         .into_iter()
         .filter(|s| {
             s.host == e.host
-                && s.st == St::Working
+                && s.st.busy()
                 && (s.name == e.name || (!e.pane.is_empty() && s.pane == e.pane))
                 && s.end <= e.t + 5
                 && s.end + MATCH >= e.t

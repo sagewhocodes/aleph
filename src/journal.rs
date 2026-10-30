@@ -402,7 +402,7 @@ pub fn assemble(
         .iter()
         .filter(|s| s.end > from && s.start < to)
     {
-        if !matches!(s.st, St::Working | St::Needs) || s.name.is_empty() {
+        if !(s.st.busy() || s.st == St::Needs) || s.name.is_empty() {
             continue;
         }
         let k = entry(&mut m, &s.host, &s.name);
@@ -410,7 +410,7 @@ pub fn assemble(
         if e.agent.is_empty() {
             e.agent = s.agent.clone();
         }
-        if s.st == St::Working {
+        if s.st.busy() {
             e.busy += s.end.min(to) - s.start.max(from);
         }
         e.touch(s.start.max(from));
@@ -545,7 +545,7 @@ pub fn assemble(
                 .iter()
                 .filter(|s| {
                     s.host == ev.host
-                        && s.st == St::Working
+                        && s.st.busy()
                         && (s.name == ev.name || (!ev.pane.is_empty() && s.pane == ev.pane))
                         && s.end <= ev.t + 5
                         && s.end + 120 >= ev.t
