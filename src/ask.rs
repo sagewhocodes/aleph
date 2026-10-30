@@ -13,6 +13,8 @@ pub struct Opt {
     /// its number on the screen (`2.`), if it has one
     pub n: Option<u32>,
     pub label: String,
+    /// a tick box on a multi-select's option: is it ticked?
+    pub ticked: Option<bool>,
 }
 
 /// What the agent asks.
@@ -23,6 +25,76 @@ pub struct Ask {
     pub options: Vec<Opt>,
     /// the option the agent's cursor is on
     pub cursor: Option<usize>,
+    /// several questions asked one at a time (see `Form`)
+    pub form: Option<Form>,
+}
+
+/// A question form: several questions, one page each, then a page to review
+/// and send them. Claude Code's AskUserQuestion draws a strip over the page,
+/// `←  ☐ Colour  ☒ Sizes  ✔ Submit  →`. herdr sees one long wait (its
+/// `state_change_seq` doesn't move between pages), and the agent's log holds
+/// the questions only once they're answered, so the screen is what tells.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Form {
+    /// each question's short name, and whether it has an answer
+    pub steps: Vec<(String, bool)>,
+    /// this is the last page: the answers to look over and send
+    pub review: bool,
+}
+
+impl Form {
+    /// The strip in these (cleaned) lines, and its line.
+    fn of(lines: &[&str]) -> Option<(usize, Form)> {
+        let i = lines.iter().rposition(|l| {
+            let t = l.trim();
+            t.starts_with('←') && t.ends_with('→') && t.contains(BOX_ANY)
+        })?;
+        let inner = lines[i]
+            .trim()
+            .trim_start_matches('←')
+            .trim_end_matches('→');
+        let steps: Vec<(String, bool)> = inner
+            .split("  ")
+            .map(str::trim)
+            .filter_map(|t| {
+                let (done, name) = if let Some(r) = t.strip_prefix(BOX_OPEN) {
+                    (false, r)
+                } else {
+                    (true, t.strip_prefix(BOX_DONE)?)
+                };
+                Some((name.trim().to_string(), done))
+            })
+            .collect();
+        (!steps.is_empty()).then(|| {
+            let review = lines[i..].iter().any(|l| l.trim() == "Review your answers");
+            (i, Form { steps, review })
+        })
+    }
+
+    /// The page it's on, from 0: the first question without an answer, else
+    /// the last one (the strip's highlight is colour, not text).
+    pub fn at(&self) -> usize {
+        self.steps
+            .iter()
+            .position(|(_, done)| !done)
+            .unwrap_or(self.steps.len().saturating_sub(1))
+    }
+
+    /// `Question 2 of 3`, or the review page's name.
+    pub fn progress(&self) -> String {
+        if self.review {
+            "Review your answers".to_string()
+        } else {
+            format!("Question {} of {}", self.at() + 1, self.steps.len())
+        }
+    }
+}
+
+/// Does this screen show a form? Those are for you: never approved on your
+/// behalf, by a rule or by a phone's one button.
+pub fn is_form(detection: &str) -> bool {
+    let cleaned: Vec<&str> = detection.lines().map(clean).collect();
+    Form::of(&cleaned).is_some()
 }
 
 /// What a key on the board asks for.
@@ -32,12 +104,20 @@ pub enum Choice {
     Deny,
     /// the option at this index
     Option(usize),
+    /// a form's next page, or the one before
+    Next,
+    Back,
 }
 
 /// Marks a cursor line (`❯ 1. Yes`, Gemini's chosen radio `●`).
 const CURSORS: &[char] = &['❯', '›', '▸', '►', '→', '●', '◉', '>'];
 /// Marks an option the cursor isn't on (radio buttons).
 const UNMARKED: &[char] = &['○', '◯', '◦'];
+/// A form's strip: a question with no answer, and one with (`✔ Submit`, the
+/// last page, isn't a question).
+const BOX_OPEN: &[char] = &['☐'];
+const BOX_DONE: &[char] = &['☒', '☑'];
+const BOX_ANY: &[char] = &['☐', '☒', '☑'];
 /// A box's sides, taken off both ends of a line.
 const SIDES: &[char] = &['│', '┃', '║', '|', '╎', '┆'];
 
@@ -105,18 +185,52 @@ impl Ask {
     pub fn parse(detection: &str) -> Ask {
         let lines: Vec<&str> = detection.lines().collect();
         let cleaned: Vec<&str> = lines.iter().map(|l| clean(l)).collect();
-        let (first, options, cursor) = numbered_menu(&cleaned)
+        if let Some((strip, form)) = Form::of(&cleaned) {
+            return Ask::of_form(&cleaned[strip + 1..], form);
+        }
+        let (first, options, cursor) = numbered_menu(&cleaned, true)
             .or_else(|| arrow_menu(&cleaned))
             .unwrap_or((lines.len(), vec![], None));
         Ask {
             question: question_above(&cleaned[..first]),
             options,
             cursor,
+            form: None,
+        }
+    }
+
+    /// One page of a form: the lines under its strip. Lines under an option
+    /// are its description, not more of its label; `Type something` and `Chat
+    /// about this` take typing, so they're left to Focus.
+    fn of_form(lines: &[&str], form: Form) -> Ask {
+        let (first, options, cursor) =
+            numbered_menu(lines, false).unwrap_or((lines.len(), vec![], None));
+        let options = options
+            .into_iter()
+            .filter_map(|mut o| {
+                let (ticked, rest) = tick_box(&o.label);
+                o.label = rest.to_string();
+                o.ticked = ticked;
+                let typed = o.label.starts_with("Type something");
+                (!typed).then_some(o)
+            })
+            .collect();
+        Ask {
+            question: question_above(&lines[..first]),
+            options,
+            cursor,
+            form: Some(form),
         }
     }
 
     /// The first option that says yes.
     pub fn yes(&self) -> Option<usize> {
+        if self.form.as_ref().is_some_and(|f| f.review) {
+            return self
+                .options
+                .iter()
+                .position(|o| o.label.to_lowercase().starts_with("submit"));
+        }
         self.options.iter().position(|o| is_yes(&o.label))
     }
 
@@ -154,16 +268,23 @@ impl Ask {
             Choice::Approve => self.keys_for(self.yes()?),
             Choice::Deny => match self.no() {
                 Some(i) => self.keys_for(i),
+                // (esc would throw a form's other answers away)
+                None if self.form.is_some() => None,
                 None => Some(vec!["esc".into()]),
             },
             Choice::Option(i) => self.keys_for(i),
+            Choice::Next => self.form.as_ref().map(|_| vec!["tab".into()]),
+            Choice::Back => self.form.as_ref().map(|_| vec!["shift+tab".into()]),
         }
     }
 
     /// The same question (another read of it): its words and options, the
-    /// cursor aside.
+    /// cursor and ticks aside.
     pub fn same(&self, other: &Ask) -> bool {
-        self.question == other.question && self.options == other.options
+        let opts = |a: &Ask| -> Vec<(Option<u32>, String)> {
+            a.options.iter().map(|o| (o.n, o.label.clone())).collect()
+        };
+        self.question == other.question && opts(self) == opts(other)
     }
 
     /// Its text, for the deny list and the log.
@@ -177,10 +298,26 @@ impl Ask {
     }
 }
 
+/// `[ ] Small` / `[✔] Large`: the tick box, and the label after it.
+fn tick_box(label: &str) -> (Option<bool>, &str) {
+    let Some(rest) = label.strip_prefix('[') else {
+        return (None, label);
+    };
+    let Some((inside, after)) = rest.split_once(']') else {
+        return (None, label);
+    };
+    match inside.trim() {
+        "" => (Some(false), after.trim_start()),
+        "✔" | "✓" | "x" | "X" | "*" => (Some(true), after.trim_start()),
+        _ => (None, label),
+    }
+}
+
 /// Options numbered 1, 2, … in a row (up to two wrapped or description
 /// lines between them): the run with the cursor in it, else the last one.
-/// (index of its first line, its options, the cursor).
-fn numbered_menu(lines: &[&str]) -> Option<(usize, Vec<Opt>, Option<usize>)> {
+/// (index of its first line, its options, the cursor). `wrap`: those lines
+/// carry the label on (else they're left out).
+fn numbered_menu(lines: &[&str], wrap: bool) -> Option<(usize, Vec<Opt>, Option<usize>)> {
     // (line index, number, label, on the cursor)
     let mut runs: Vec<Vec<(usize, u32, String, bool)>> = Vec::new();
     let mut cur: Vec<(usize, u32, String, bool)> = Vec::new();
@@ -207,7 +344,7 @@ fn numbered_menu(lines: &[&str]) -> Option<(usize, Vec<Opt>, Option<usize>)> {
             }
             // a wrapped option goes on: the label carries on with it
             None if !cur.is_empty() && gap < 2 && !l.is_empty() && !rule(l) => {
-                if let Some(x) = cur.last_mut() {
+                if let Some(x) = cur.last_mut().filter(|_| wrap) {
                     x.2.push(' ');
                     x.2.push_str(l);
                 }
@@ -237,6 +374,7 @@ fn numbered_menu(lines: &[&str]) -> Option<(usize, Vec<Opt>, Option<usize>)> {
             .map(|x| Opt {
                 n: Some(x.1),
                 label: x.2.clone(),
+                ticked: None,
             })
             .collect(),
         cursor,
@@ -276,6 +414,7 @@ fn arrow_menu(lines: &[&str]) -> Option<(usize, Vec<Opt>, Option<usize>)> {
             .map(|l| Opt {
                 n: None,
                 label: marked(l).1.to_string(),
+                ticked: None,
             })
             .collect(),
         Some(ci - a - q_end),
@@ -307,6 +446,84 @@ mod tests {
 
     fn labels(a: &Ask) -> Vec<&str> {
         a.options.iter().map(|o| o.label.as_str()).collect()
+    }
+
+    /// Claude Code 2.1.314's form, as herdr read it, page by page.
+    fn form_page(n: u32) -> Ask {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/fixtures/ask/claude-form-{n}.txt"));
+        Ask::parse(&std::fs::read_to_string(p).unwrap())
+    }
+
+    #[test]
+    fn a_forms_first_page() {
+        let a = form_page(1);
+        let f = a.form.as_ref().expect("a form");
+        assert_eq!(
+            f.steps,
+            vec![("Colour".to_string(), false), ("Sizes".to_string(), false)]
+        );
+        assert!(!f.review);
+        assert_eq!(f.progress(), "Question 1 of 2");
+        assert_eq!(a.question, vec!["Pick a colour"]);
+        // an option's description isn't its label; typing is left to Focus
+        assert_eq!(labels(&a), vec!["Red", "Blue"]);
+        assert_eq!(a.cursor, Some(0));
+        assert_eq!(
+            a.keys(Choice::Option(1)),
+            Some(vec!["down".into(), "enter".into()])
+        );
+        assert_eq!(a.keys(Choice::Next), Some(vec!["tab".into()]));
+    }
+
+    #[test]
+    fn a_forms_multi_select_page_ticks() {
+        let a = form_page(2);
+        assert_eq!(a.form.as_ref().unwrap().progress(), "Question 2 of 2");
+        assert_eq!(a.question, vec!["Pick sizes"]);
+        assert_eq!(labels(&a), vec!["Small", "Large"]);
+        assert_eq!(a.options[0].ticked, Some(false));
+        // ticked: the same question, but a different screen
+        let b = form_page(3);
+        assert_eq!(b.options[0].ticked, Some(true));
+        assert!(a.same(&b) && a != b);
+        // another page isn't the same question
+        assert!(!a.same(&form_page(1)));
+    }
+
+    #[test]
+    fn a_forms_review_page_sends_or_cancels() {
+        let a = form_page(4);
+        let f = a.form.as_ref().unwrap();
+        assert!(f.review);
+        assert_eq!(f.progress(), "Review your answers");
+        assert_eq!(labels(&a), vec!["Submit answers", "Cancel"]);
+        assert_eq!(a.yes(), Some(0));
+        assert_eq!(a.no(), Some(1));
+        assert_eq!(a.keys(Choice::Approve), Some(vec!["enter".into()]));
+        assert!(a.question.iter().any(|q| q.contains("Pick a colour")));
+    }
+
+    #[test]
+    fn a_form_is_never_cancelled_by_accident() {
+        // no "no" on this page: n sends nothing (esc would drop every answer)
+        let a = form_page(1);
+        assert_eq!(a.no(), None);
+        assert_eq!(a.keys(Choice::Deny), None);
+        // and it's no plain question: no rule or phone button says yes to it
+        for n in 1..=4 {
+            let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/fixtures/ask/claude-form-{n}.txt"));
+            let text = std::fs::read_to_string(p).unwrap();
+            assert!(is_form(&text));
+            assert_eq!(crate::herdr::approve_keys(&text), None);
+        }
+        assert!(!is_form("Run?\n❯ 1. Yes\n  2. No"));
+        // a plain question keeps its esc
+        assert_eq!(
+            Ask::parse("Run?\n❯ 1. Go\n  2. Wait").keys(Choice::Deny),
+            Some(vec!["esc".into()])
+        );
     }
 
     #[test]

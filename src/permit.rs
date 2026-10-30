@@ -50,6 +50,14 @@ pub fn allowed(cfg: &Config, host: &str, agent: &str) -> bool {
         && !matches(&globs(cfg, "remote.deny"), host, agent)
 }
 
+/// Why this question can't be answered from a phone: the deny list, or a form
+/// of several questions (a phone's buttons answer one at most).
+pub fn not_from_phone(cfg: &Config, question: &str) -> Option<String> {
+    terminal_only(cfg, question).or_else(|| {
+        crate::ask::is_form(question).then(|| "a form of several questions".to_string())
+    })
+}
+
 /// Must this question be answered at a terminal (the `approve_deny` list)?
 pub fn terminal_only(cfg: &Config, question: &str) -> Option<String> {
     crate::auto::deny_list(cfg)

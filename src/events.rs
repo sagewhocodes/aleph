@@ -693,6 +693,8 @@ pub fn from_poll(
         let kind = match (tr.from.as_str(), s.status.as_str()) {
             ("", _) => continue,
             (_, "blocked") => Kind::Blocked,
+            // a compaction ended: no turn did
+            ("working", "done" | "idle") if s.compacted => continue,
             ("working", "done" | "idle") => Kind::Done,
             _ => continue,
         };

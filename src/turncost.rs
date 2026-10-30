@@ -346,17 +346,20 @@ fn read_after_turn(cfg: &Config, e: &Event) -> bool {
     })
 }
 
-/// Should this finished turn stay quiet: the agent woke because a subagent
-/// reported back, with others still out (`notify.subagents` turns this off)?
-/// Blocking, like [`for_alert`]. Nothing read in time: it isn't held back.
-pub fn subagent_turn(cfg: &Config, e: &Event, live: Option<&Session>) -> bool {
+/// Should this finished turn stay quiet? A compaction ending isn't a turn, and
+/// nor is an agent waking because a subagent reported back with others still
+/// out (`notify.subagents` turns that one off). Blocking, like [`for_alert`].
+/// Nothing read in time: it isn't held back.
+pub fn quiet_turn(cfg: &Config, e: &Event, live: Option<&Session>) -> bool {
     let native = native_of(e, live);
-    if native.is_empty() || cfg.flag("notify.subagents") || !usage::enabled(cfg) || cfg!(test) {
+    if native.is_empty() || !usage::enabled(cfg) || cfg!(test) {
         return false;
     }
     read_after_turn(cfg, e);
     let steps = usage::steps::of_session(&e.host, &native, 2);
-    usage::steps::woken_by_subagent(&steps, (e.t + 1) * 1000)
+    let at = (e.t + 1) * 1000;
+    usage::steps::ended_in_compaction(&steps, at)
+        || (!cfg.flag("notify.subagents") && usage::steps::woken_by_subagent(&steps, at))
 }
 
 /// A finished turn for the desktop banner: its numbers after its words.

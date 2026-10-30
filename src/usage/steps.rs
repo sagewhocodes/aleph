@@ -368,6 +368,26 @@ pub fn woken_by_subagent(steps: &[Step], at_ms: u64) -> bool {
     background.len() > reports.len()
 }
 
+/// Did the turn that ended by `at_ms` end in a compaction: the main agent's last
+/// compaction just before it, and nothing done since? (A compaction in the
+/// middle of work is followed by the work, or by the time an answer takes.)
+pub fn ended_in_compaction(steps: &[Step], at_ms: u64) -> bool {
+    const JUST: u64 = 6_000;
+    let Some(c) = steps
+        .iter()
+        .filter(|s| s.kind == Kind::Compact && s.lane.is_empty() && s.ms <= at_ms)
+        .map(|s| s.ms)
+        .max()
+    else {
+        return false;
+    };
+    // (its own lines land with it: `/compact`'s output, in the same moment)
+    at_ms.saturating_sub(c) <= JUST
+        && !steps
+            .iter()
+            .any(|s| s.lane.is_empty() && s.kind != Kind::Lane && s.ms > c + 2_000 && s.ms <= at_ms)
+}
+
 /// Drop whole months older than `before` (unix s); the rest is kept.
 pub fn prune(before: u64) -> usize {
     let mut n = 0;
@@ -550,6 +570,28 @@ mod tests {
         // you ask again, with nothing out: news
         v.extend(log(&[("p", 200, "", "you-2", "u", "")]));
         assert!(!woken_by_subagent(&v, 205_000));
+    }
+
+    #[test]
+    fn a_turn_that_only_compacted_is_known() {
+        // /compact: its prompt, the boundary, its output, then at rest
+        let v = log(&[
+            ("p", 100, "", "you", "u", ""),
+            ("p", 200, "", "slash", "u", ""),
+            ("c", 206, "", "boundary", "", ""),
+            ("p", 206, "", "output", "u", ""),
+        ]);
+        assert!(ended_in_compaction(&v, 208_000));
+        // long after it: another turn's end
+        assert!(!ended_in_compaction(&v, 300_000));
+        // work after a compaction in mid-turn: a real end
+        let mut w = v.clone();
+        w.extend(log(&[("ks", 210, "", "t1", "Read", "tool")]));
+        assert!(!ended_in_compaction(&w, 212_000));
+        // a subagent's compaction isn't the session's
+        let v = log(&[("c", 206, "lane-a", "b", "", "")]);
+        assert!(!ended_in_compaction(&v, 208_000));
+        assert!(!ended_in_compaction(&[], 208_000));
     }
 
     #[test]

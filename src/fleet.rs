@@ -312,10 +312,19 @@ enum Msg {
         alias: String,
         found: Vec<(String, String, Option<String>)>,
     },
+    /// a compaction scan: the panes read, and those compacting
+    Compacting {
+        alias: String,
+        read: Vec<String>,
+        found: Vec<String>,
+    },
 }
 
 /// How often idle sessions' screens are read for usage limits.
 const LIMIT_SCAN: Duration = Duration::from_secs(30);
+/// How often working sessions' screens are read for a compaction (they last
+/// from seconds to a few minutes; a short one missed only goes unlabelled).
+const COMPACT_SCAN: Duration = Duration::from_secs(8);
 
 /// This computer's herdr version, asked once per run.
 pub fn local_herdr_version() -> Option<String> {
@@ -523,6 +532,12 @@ pub struct Fleet {
     limits: HashMap<String, (String, String)>,
     /// alias → when its last limit scan started (and whether it runs)
     limit_scan: HashMap<String, (Instant, bool)>,
+    /// sessions (`Session::key`) whose screens last said they're compacting
+    compacting: std::collections::HashSet<String>,
+    /// sessions at rest after a compaction, with the `done_seq` that ended it
+    compacted: HashMap<String, u64>,
+    /// per machine: the last compaction scan, and whether one is running
+    compact_scan: HashMap<String, (Instant, bool)>,
 }
 
 /// How long to wait before polling `h` again: the refresh interval while it
@@ -604,6 +619,37 @@ impl Host {
     }
 }
 
+/// One polled session and what's known of its compaction. Working: labelled.
+/// At rest with a compaction just seen: nothing finished, so it reads idle
+/// (herdr calls it done, and counts a completion) until it moves again.
+fn note_compaction(
+    s: &mut Session,
+    compacting: &mut std::collections::HashSet<String>,
+    compacted: &mut HashMap<String, u64>,
+) {
+    let k = s.key();
+    let at_rest = matches!(s.status.as_str(), "done" | "idle");
+    if compacting.contains(&k) {
+        if s.status == "working" {
+            s.compacting = true;
+        } else {
+            compacting.remove(&k);
+            if at_rest {
+                compacted.insert(k.clone(), s.done_seq);
+            }
+        }
+    }
+    if let Some(seq) = compacted.get(&k).copied() {
+        // (herdr's completion_seq goes once it's been seen: at rest still counts)
+        if at_rest && (s.done_seq == seq || s.done_seq == 0) {
+            s.compacted = true;
+            s.status = "idle".into();
+        } else {
+            compacted.remove(&k);
+        }
+    }
+}
+
 impl Fleet {
     /// The machines this computer can't reach. A machine that answers with no
     /// herdr running isn't one of them: its agents' logs can still be read.
@@ -647,6 +693,9 @@ impl Fleet {
             scan_limits: false,
             limits: HashMap::new(),
             limit_scan: HashMap::new(),
+            compacting: Default::default(),
+            compacted: HashMap::new(),
+            compact_scan: HashMap::new(),
         };
         for a in aliases {
             f.add_host(cfg, &a);
@@ -685,6 +734,9 @@ impl Fleet {
             scan_limits: false,
             limits: HashMap::new(),
             limit_scan: HashMap::new(),
+            compacting: Default::default(),
+            compacted: HashMap::new(),
+            compact_scan: HashMap::new(),
         }
     }
 
@@ -1007,6 +1059,24 @@ impl Fleet {
                         h.herdr_info = Some(info);
                     }
                 }
+                Msg::Compacting { alias, read, found } => {
+                    self.compact_scan
+                        .insert(alias.clone(), (Instant::now(), false));
+                    for pane in read {
+                        let k = format!("{alias}|{pane}");
+                        if found.contains(&pane) {
+                            self.compacting.insert(k);
+                        } else {
+                            self.compacting.remove(&k);
+                        }
+                    }
+                    let compacting = &self.compacting;
+                    if let Some(h) = self.hosts.iter_mut().find(|h| h.alias == alias) {
+                        for s in h.sessions.iter_mut() {
+                            s.compacting = s.status == "working" && compacting.contains(&s.key());
+                        }
+                    }
+                }
                 Msg::Limits { alias, found } => {
                     self.limit_scan
                         .insert(alias.clone(), (Instant::now(), false));
@@ -1084,6 +1154,7 @@ impl Fleet {
         }
         if self.scan_limits {
             self.scan_for_limits();
+            self.scan_for_compaction();
         }
         out
     }
@@ -1134,6 +1205,45 @@ impl Fleet {
         }
     }
 
+    /// Every `COMPACT_SCAN`, read the end of each machine's working agents'
+    /// screens (one ssh call per machine): which are compacting?
+    fn scan_for_compaction(&mut self) {
+        for h in &self.hosts {
+            if h.conn != Conn::Up {
+                continue;
+            }
+            let due = self
+                .compact_scan
+                .get(&h.alias)
+                .is_none_or(|(t, running)| !running && t.elapsed() >= COMPACT_SCAN);
+            let panes: Vec<String> = h
+                .sessions
+                .iter()
+                .filter(|s| s.status == "working" && s.agent != crate::agents::SHELL)
+                .map(|s| s.pane_id.clone())
+                .collect();
+            if !due || panes.is_empty() {
+                continue;
+            }
+            self.compact_scan
+                .insert(h.alias.clone(), (Instant::now(), true));
+            let (t, tx, alias) = (h.target.clone(), self.tx.clone(), h.alias.clone());
+            thread::spawn(move || {
+                let text = Herdr::new(&t).read_many(&panes, crate::limits::LINES);
+                let found = panes
+                    .iter()
+                    .filter(|p| text.get(*p).is_some_and(|x| crate::limits::compacting(x)))
+                    .cloned()
+                    .collect();
+                let _ = tx.send(Msg::Compacting {
+                    alias,
+                    read: panes,
+                    found,
+                });
+            });
+        }
+    }
+
     fn apply(
         &mut self,
         alias: &str,
@@ -1155,6 +1265,7 @@ impl Fleet {
                 for s in v.iter_mut() {
                     s.host = alias.to_string();
                     let k = s.key();
+                    note_compaction(s, &mut self.compacting, &mut self.compacted);
                     match self.limits.get(&k) {
                         Some((st, r)) if *st == s.status => s.limit = Some(r.clone()),
                         Some(_) => {
@@ -1436,6 +1547,7 @@ pub fn session_to_json(s: &Session) -> Value {
         "status": s.status, "status_since": s.since, "cwd": s.cwd, "title": s.title,
         "mark": s.mark, "hue": s.hue, "focused": s.focused, "limit": s.limit,
         "seq": s.seq, "done_seq": s.done_seq, "ready": s.ready, "native_id": s.native_id,
+        "compacting": s.compacting, "compacted": s.compacted,
     })
 }
 
@@ -1465,6 +1577,11 @@ pub(crate) fn session_from_json(v: &Value) -> Option<Session> {
         seq: v.get("seq").and_then(Value::as_u64).unwrap_or(0),
         done_seq: v.get("done_seq").and_then(Value::as_u64).unwrap_or(0),
         ready: v.get("ready").and_then(Value::as_bool),
+        compacting: v
+            .get("compacting")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        compacted: v.get("compacted").and_then(Value::as_bool).unwrap_or(false),
         native_id: v
             .get("native_id")
             .and_then(Value::as_str)
@@ -1534,6 +1651,39 @@ mod tests {
     }
 
     #[test]
+    fn a_compactions_end_is_not_a_finished_turn() {
+        let (mut on, mut after) = (std::collections::HashSet::new(), HashMap::new());
+        let polled = |status: &str, done_seq: u64, on: &mut _, after: &mut _| {
+            let mut s = Session {
+                host: "b31".into(),
+                pane_id: "w1:p1".into(),
+                status: status.into(),
+                done_seq,
+                ..Default::default()
+            };
+            note_compaction(&mut s, on, after);
+            s
+        };
+        // nothing known: as herdr says
+        let s = polled("done", 44, &mut on, &mut after);
+        assert!(s.status == "done" && !s.compacted);
+        // its screen says compacting (herdr: working, then done with its seq up)
+        on.insert("b31|w1:p1".to_string());
+        let s = polled("working", 0, &mut on, &mut after);
+        assert!(s.compacting && s.status == "working");
+        let s = polled("done", 46, &mut on, &mut after);
+        assert!(s.compacted && !s.compacting && s.status == "idle");
+        // seen: herdr drops the seq, and it's still that rest
+        let s = polled("idle", 0, &mut on, &mut after);
+        assert!(s.compacted && s.status == "idle");
+        // it works again, and finishes: a real end
+        let s = polled("working", 0, &mut on, &mut after);
+        assert!(!s.compacted && !s.compacting);
+        let s = polled("done", 48, &mut on, &mut after);
+        assert!(!s.compacted && s.status == "done");
+    }
+
+    #[test]
     fn this_computer_has_no_link_to_grade() {
         // a slow answer from the local herdr is a busy machine, not a bad link
         let host = |alias: &str| {
@@ -1595,6 +1745,9 @@ mod tests {
             scan_limits: false,
             limits: HashMap::new(),
             limit_scan: HashMap::new(),
+            compacting: Default::default(),
+            compacted: HashMap::new(),
+            compact_scan: HashMap::new(),
         };
         f.hosts.push(Host {
             alias: alias.into(),

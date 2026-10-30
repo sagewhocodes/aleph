@@ -55,6 +55,10 @@ pub struct Session {
     pub ready: Option<bool>,
     /// the agent's own conversation id (`agent_session.value`), for resuming it
     pub native_id: Option<String>,
+    /// compacting its conversation, as its screen says (filled in by the fleet)
+    pub compacting: bool,
+    /// at rest because a compaction ended, not because a turn did
+    pub compacted: bool,
 }
 
 impl Session {
@@ -2058,6 +2062,8 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
                 .and_then(Value::as_str)
                 .filter(|v| !v.is_empty())
                 .map(String::from),
+            compacting: false,
+            compacted: false,
         });
     }
     // plain shells Aleph started (`shell_<name>` tabs): their panes, which
@@ -2101,6 +2107,10 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
 /// no clear "yes" option. Never assumes option 1 is yes: e.g. Claude Code's folder-trust
 /// prompt lists "No, exit" first.
 pub fn approve_keys(detection: &str) -> Option<Vec<String>> {
+    // a form of questions is for you to answer: no rule or button says yes to it
+    if crate::ask::is_form(detection) {
+        return None;
+    }
     fn yes(t: &str) -> bool {
         let t = t.trim().to_lowercase();
         [

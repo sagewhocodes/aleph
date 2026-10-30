@@ -918,7 +918,7 @@ impl Router {
             let mut ctxs: HashMap<String, crate::message::Ctx> = HashMap::new();
             // each machine asked once, just before its questions leave: still waiting?
             let mut fresh: HashMap<String, Vec<crate::herdr::Session>> = HashMap::new();
-            // finished turns that are only a subagent reporting back
+            // finished turns that are only a subagent reporting back, or a compaction
             let mut quiet: HashMap<String, bool> = HashMap::new();
             for (to, e, b) in out {
                 if e.kind == Kind::Blocked && to.remote() {
@@ -968,15 +968,17 @@ impl Router {
                     let live = looks.get(&e.id()).and_then(|(s, _, _)| s.as_ref());
                     let q = *quiet
                         .entry(e.id())
-                        .or_insert_with(|| crate::turncost::subagent_turn(&cfg, &e, live));
+                        .or_insert_with(|| crate::turncost::quiet_turn(&cfg, &e, live));
                     if q {
                         crate::log::debug(
                             "notify",
-                            &format!("{}:{}: a subagent reported back — not sent", e.host, e.name),
+                            &format!("{}:{}: no turn of yours ended — not sent", e.host, e.name),
                         );
                         continue;
                     }
                 }
+                // (one the phone can't answer gets no buttons)
+                let b = b.filter(|_| ctx.terminal_only.is_none());
                 if let Err(x) = send_retry(&cfg, to, &e, b.as_ref(), ctx) {
                     crate::log::warn("notify", &format!("{} failed: {x}", to.name()));
                 }

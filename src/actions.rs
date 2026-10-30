@@ -349,8 +349,8 @@ pub fn handle_from(
     let q = h
         .read(&s.pane_id, "detection", 0, false)
         .unwrap_or_default();
-    if crate::permit::terminal_only(cfg, &q).is_some() {
-        return Err("that question is on the deny list — answer it at the terminal".into());
+    if crate::permit::not_from_phone(cfg, &q).is_some() {
+        return Err("that question waits for you — answer it at the terminal".into());
     }
     let keys = match g.act {
         Act::Approve => crate::herdr::approve_keys(&q).ok_or("no yes option in that question")?,

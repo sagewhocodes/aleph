@@ -4075,6 +4075,56 @@ fn a_full_screen_apps_preview_is_fitted_not_wrapped() {
     assert!(!fleet::screen_like(&prose));
 }
 
+#[test]
+fn the_approval_board_walks_a_form_page_by_page() {
+    let page = |n: u32| {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/fixtures/ask/claude-form-{n}.txt"));
+        std::fs::read_to_string(p).unwrap()
+    };
+    let mut d = dash();
+    let _ = render(&mut d, 170, 40);
+    d.on_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+    super::approvals::read_back(&mut d, "b31|w1:p2", &page(1));
+    let s = render(&mut d, 170, 40);
+    assert!(
+        s.contains("Question 1 of 2") && s.contains("☐ Colour"),
+        "{s}"
+    );
+    assert!(s.contains("Red") && s.contains("Blue"), "{s}");
+    // Y (approve all) never answers a form: nothing goes on its way
+    d.on_key(k(KeyCode::Char('Y')));
+    d.mode = Mode::Approvals;
+    assert!(!render(&mut d, 170, 40).contains("waiting for it to move on"));
+    // an answer: on its way, until the next page's read shows it landed
+    d.on_key(k(KeyCode::Char('1')));
+    assert!(render(&mut d, 170, 40).contains("waiting for it to move on"));
+    super::approvals::read_back(&mut d, "b31|w1:p2", &page(2));
+    let s = render(&mut d, 170, 40);
+    assert!(!s.contains("waiting for it to move on"), "{s}");
+    assert!(
+        s.contains("Question 2 of 2") && s.contains("☒ Colour"),
+        "{s}"
+    );
+    assert!(s.contains("☐ Small") && s.contains("next"), "{s}");
+    // a tick is the same question, and its answer has landed too
+    d.on_key(k(KeyCode::Char('1')));
+    super::approvals::read_back(&mut d, "b31|w1:p2", &page(3));
+    let s = render(&mut d, 170, 40);
+    assert!(
+        s.contains("☒ Small") && !s.contains("waiting for it to move on"),
+        "{s}"
+    );
+    // ⇥: on to the review page, where y sends
+    d.on_key(k(KeyCode::Tab));
+    super::approvals::read_back(&mut d, "b31|w1:p2", &page(4));
+    let s = render(&mut d, 170, 40);
+    assert!(
+        s.contains("Review your answers") && s.contains("Submit answers"),
+        "{s}"
+    );
+}
+
 /// ctrl+a from any view: every agent waiting, its question as it shows it,
 /// its options to answer; cards on v; a question on the deny list only at
 /// the terminal; one no longer asked is marked, then leaves.

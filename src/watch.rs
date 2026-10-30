@@ -514,7 +514,8 @@ pub fn note_for(t: &Transition, notify_done: bool) -> Option<Note> {
     if to == "blocked" && t.from != "blocked" {
         return Some(note(&t.session, Kind::NeedsYou));
     }
-    if notify_done && t.from == "working" && (to == "done" || to == "idle") {
+    if notify_done && t.from == "working" && (to == "done" || to == "idle") && !t.session.compacted
+    {
         return Some(note(&t.session, Kind::Finished));
     }
     None

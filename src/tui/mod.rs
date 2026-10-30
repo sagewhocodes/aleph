@@ -717,7 +717,7 @@ impl Dash {
                         self.bell();
                     }
                 }
-                "done" | "idle" if t.from == "working" => {
+                "done" | "idle" if t.from == "working" && !s.compacted => {
                     self.rung.remove(&s.key());
                     self.finished_toast(s, who);
                 }
@@ -752,7 +752,7 @@ impl Dash {
         };
         let (cfg, tx, s) = (self.cfg.clone(), self.tx.clone(), s.clone());
         std::thread::spawn(move || {
-            if !crate::turncost::subagent_turn(&cfg, &e, Some(&s)) {
+            if !crate::turncost::quiet_turn(&cfg, &e, Some(&s)) {
                 let _ = tx.send(Bg::Done {
                     ok: true,
                     msg: format!("✓ {who} finished"),

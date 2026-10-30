@@ -94,7 +94,7 @@ impl Ctx {
                 .into_iter()
                 .map(|(n, l)| (n, crate::ui::trunc(&l, 60)))
                 .collect();
-            c.terminal_only = crate::permit::terminal_only(cfg, detection);
+            c.terminal_only = crate::permit::not_from_phone(cfg, detection);
         }
         if !e.body.is_empty() && c.question.is_empty() && mode != "off" {
             // the agent's own words (its hook) when there's no question to read

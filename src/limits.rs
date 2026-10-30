@@ -13,6 +13,22 @@
 //! …) and their issue trackers where it isn't (Antigravity, Cursor) —
 //! checked 2026-10-25.
 
+/// Is the agent compacting its conversation right now? Its spinner's line says
+/// so: `✽ Compacting conversation… (5s · ↓ 468 tokens)` (Claude Code), others'
+/// "Compressing chat history…". Only a line that starts with it and trails off:
+/// an agent talking about compaction doesn't count, nor does `⎿ Compacted`.
+/// herdr has no state for this: it says working, then done, as for any turn.
+pub fn compacting(screen: &str) -> bool {
+    const WORDS: &[&str] = &["compacting", "auto-compacting", "compressing"];
+    screen.lines().rev().take(LINES).any(|l| {
+        let t = l
+            .trim()
+            .trim_start_matches(|c: char| !c.is_alphanumeric())
+            .to_lowercase();
+        WORDS.iter().any(|w| t.starts_with(w)) && (t.contains('…') || t.contains("..."))
+    })
+}
+
 /// How many lines from the bottom of the screen are looked at.
 pub const LINES: usize = 14;
 
@@ -301,6 +317,23 @@ fn short_dur(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_compaction_is_read_from_its_spinner() {
+        // as Claude Code 2.1.314 draws it
+        assert!(compacting(
+            "❯ /compact\n\n✽ Compacting conversation… (5s · ↓ 468 tokens)\n  ⎿  Tip: Double-tap esc\n"
+        ));
+        assert!(compacting("· Compacting conversation… (1s)"));
+        assert!(compacting("⠋ Compressing chat history..."));
+        // over, or only talked about
+        assert!(!compacting("  ⎿  Compacted (ctrl+o to see full summary)"));
+        assert!(!compacting(
+            "I'd avoid compacting conversation history here…"
+        ));
+        assert!(!compacting("Compacting is a good idea"));
+        assert!(!compacting(""));
+    }
 
     #[test]
     fn claude_code_limits() {

@@ -218,8 +218,8 @@ impl Bridge {
             let (tx, cfg) = (self.tx.clone(), cfg.clone());
             thread::spawn(move || {
                 let line = crate::turncost::for_alert(&cfg, &turn, Some(&s));
-                // only a subagent reporting back, with others still out
-                if crate::turncost::subagent_turn(&cfg, &turn, Some(&s)) {
+                // only a subagent reporting back, or a compaction ending
+                if crate::turncost::quiet_turn(&cfg, &turn, Some(&s)) {
                     return;
                 }
                 let m = crate::message::finished_turn(&cfg, &s, took, &said, line);
@@ -267,7 +267,7 @@ impl Bridge {
                     // a short turn: you were likely there for it
                     let min = crate::log::parse_duration(&cfg.get_or("notify.done_min"))
                         .map_or(0, |d| d.as_secs());
-                    if want.contains("done") && (t.took == 0 || t.took >= min) {
+                    if want.contains("done") && !s.compacted && (t.took == 0 || t.took >= min) {
                         self.finished.push((Instant::now(), s.clone(), t.took));
                     }
                 }
@@ -600,7 +600,7 @@ fn ask_once(
     if det.trim().is_empty() {
         return Ok(()); // nothing readable to ask about
     }
-    if let Some(rule) = crate::permit::terminal_only(cfg, &det) {
+    if let Some(rule) = crate::permit::not_from_phone(cfg, &det) {
         if notify_needs_you {
             let m = crate::message::about(cfg, s, Kind::Blocked, &det);
             let _ = moshi::notify(&Note {

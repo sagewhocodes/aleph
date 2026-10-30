@@ -145,7 +145,13 @@ pub(crate) fn pump(d: &mut Dash) {
             Ok(t) => {
                 let lines = crate::ansi::lines(&t);
                 let plain: Vec<String> = lines.iter().map(crate::ansi::plain).collect();
-                e.ask = Some(Ask::parse(&plain.join("\n")));
+                let ask = Ask::parse(&plain.join("\n"));
+                // a form moves on with herdr's seq standing still: a new page
+                // (or a tick) is the answer having landed, and it's your turn
+                if ask.form.is_some() && e.ask.as_ref() != Some(&ask) {
+                    e.sent = None;
+                }
+                e.ask = Some(ask);
                 e.lines = lines;
                 e.err = None;
             }
@@ -208,6 +214,13 @@ pub(crate) fn pump(d: &mut Dash) {
 fn selected(d: &Dash) -> Option<usize> {
     let k = d.appr.sel.as_ref()?;
     d.appr.entries.iter().position(|e| e.s.key() == *k)
+}
+
+/// The selected question is one page of a form.
+fn form_selected(d: &Dash) -> bool {
+    selected(d)
+        .and_then(|i| d.appr.entries[i].ask.as_ref())
+        .is_some_and(|a| a.form.is_some())
 }
 
 fn select(d: &mut Dash, i: usize) {
@@ -310,6 +323,8 @@ pub(crate) fn key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
             }
             select(d, down);
         }
+        KeyCode::Tab if form_selected(d) => answer(d, Choice::Next),
+        KeyCode::BackTab if form_selected(d) => answer(d, Choice::Back),
         KeyCode::Char('y') => answer(d, Choice::Approve),
         KeyCode::Char('n') => answer(d, Choice::Deny),
         KeyCode::Char(ch @ '1'..='9') => answer(d, Choice::Option(ch as usize - '1' as usize)),
@@ -449,6 +464,7 @@ fn word(a: &Answer) -> &'static str {
         Choice::Approve => "approved",
         Choice::Deny => "denied",
         Choice::Option(_) => "answered",
+        Choice::Next | Choice::Back => "moved on in",
     }
 }
 
@@ -460,7 +476,7 @@ fn approve_all(d: &mut Dash) {
         .iter()
         .filter(|e| e.sent.is_none())
         .filter_map(|e| {
-            let ask = e.ask.clone()?;
+            let ask = e.ask.clone().filter(|a| a.form.is_none())?;
             ask.yes()?;
             crate::permit::terminal_only(&d.cfg, &ask.text())
                 .is_none()
@@ -537,6 +553,7 @@ pub(crate) fn send(d: &mut Dash, v: Vec<Answer>) {
                 Choice::Approve => fresh.yes(),
                 Choice::Deny => fresh.no(),
                 Choice::Option(i) => Some(i),
+                Choice::Next | Choice::Back => None,
             }
             .and_then(|i| fresh.options.get(i))
             .map(|o| format!(" · {}", ui::trunc(&o.label, 40)))
@@ -716,6 +733,7 @@ fn options_bar(d: &Dash, i: usize, w: u16) -> Vec<Line<'static>> {
     let n = ask.options.len().min(9);
     let each = ((w as usize).saturating_sub(4) / n).clamp(10, 60);
     let mut l: Vec<Span<'static>> = vec![];
+    let head = ask.form.as_ref().map(form_line);
     for (j, o) in ask.options.iter().take(9).enumerate() {
         let col = if Some(j) == yes {
             c::GREEN()
@@ -730,12 +748,18 @@ fn options_bar(d: &Dash, i: usize, w: u16) -> Vec<Line<'static>> {
         } else if Some(j) == no {
             l.push(ui::keycap("n"));
         }
+        let tick = match o.ticked {
+            Some(true) => "☒ ",
+            Some(false) => "☐ ",
+            None => "",
+        };
         l.push(Span::styled(
-            format!(" {}  ", ui::trunc(&o.label, each.saturating_sub(6))),
+            format!(" {tick}{}  ", ui::trunc(&o.label, each.saturating_sub(8))),
             Style::new().fg(col).add_modifier(Modifier::BOLD),
         ));
     }
-    let mut v = vec![Line::from(l)];
+    let mut v: Vec<Line<'static>> = head.into_iter().collect();
+    v.push(Line::from(l));
     if ask.options.len() > 9 {
         v.push(Line::from(Span::styled(
             format!(
@@ -746,6 +770,26 @@ fn options_bar(d: &Dash, i: usize, w: u16) -> Vec<Line<'static>> {
         )));
     }
     v
+}
+
+/// A form's place: where it's at, its questions, what ⇥ does.
+fn form_line(form: &crate::ask::Form) -> Line<'static> {
+    let mut l = vec![Span::styled(
+        format!("{}  ", form.progress()),
+        ui::fg(c::ACCENT()).add_modifier(Modifier::BOLD),
+    )];
+    for (i, (name, done)) in form.steps.iter().enumerate() {
+        let here = !form.review && i == form.at();
+        l.push(Span::styled(
+            format!("{} {name}  ", if *done { "☒" } else { "☐" }),
+            if here { ui::bold() } else { ui::muted() },
+        ));
+    }
+    l.push(ui::keycap("⇥"));
+    l.push(Span::styled(" next  ", ui::muted()));
+    l.push(ui::keycap("⇧⇥"));
+    l.push(Span::styled(" back", ui::muted()));
+    Line::from(l)
 }
 
 /// The list beside the selected question.
@@ -867,6 +911,15 @@ fn draw_list(d: &mut Dash, f: &mut Frame, body: Rect) {
 /// What a question asks, in a line: its last words before the question
 /// itself ("Bash command · pytest -x tests/"), else the question.
 fn summary_of(a: &Ask) -> String {
+    let words = question_words(a);
+    match &a.form {
+        Some(f) if f.review => format!("{} · {words}", f.progress()),
+        Some(f) => format!("{}/{} · {words}", f.at() + 1, f.steps.len()),
+        None => words,
+    }
+}
+
+fn question_words(a: &Ask) -> String {
     let lines: Vec<&str> = a
         .question
         .iter()

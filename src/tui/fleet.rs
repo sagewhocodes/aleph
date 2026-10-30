@@ -1180,7 +1180,10 @@ pub(crate) fn status_spans(s: &Session, t0: Instant) -> (String, Color) {
     if let Some(r) = &s.limit {
         return (limit_text(r), c::LIMIT());
     }
-    let (g, col, label) = ui::status(&s.status, t0);
+    let (g, col, mut label) = ui::status(&s.status, t0);
+    if s.compacting {
+        label = "compacting".into();
+    }
     let d = dur_since(s.since);
     let text = if d.is_empty() || s.status == "idle" {
         format!("{g} {label}")
