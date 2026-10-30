@@ -10,6 +10,28 @@
 # only a build with that feature carries them.
 
 [[entry]]
+id = "2.1.0-fixes"
+date = "2026-10-30"
+title = "Compaction, forms of questions, and more on every row"
+notes = [
+  "A session compacting says so and stays working, and the end of a compaction no longer counts as a finished turn.",
+  "Forms of questions are walked page by page on the approval board (ctrl+a): which page you're on, tick boxes, the Submit page; Tab and shift+Tab move between pages.",
+  "Every session row shows its model: name, model, state, folder, then tokens, context, cost and time.",
+  "Agents outside herdr show their own usage and how long they've run.",
+  "When an agent exits by itself, its pane closes. close.exited = keep leaves it open.",
+  "The expanded Fleet (z) names every GPU in full, and spare rows show GPU, machine, network, disk, agent and service detail.",
+  "Started and ended events stay out of the Inbox unless you set inbox.lifecycle. No ping for this computer. No Services page when it's off. Usage's Overview fills a tall screen.",
+]
+commits = [
+  "No ping for this computer, no Services page when it's off, no start and end rows",
+  "Compaction has its own state, and forms of questions are walked page by page",
+  "The model on every session row; outside rows know their conversation",
+  "When an agent exits by itself, its pane closes (close.exited)",
+  "Usage fills a tall screen",
+  "The expanded Fleet names every GPU and fills the screen",
+]
+
+[[entry]]
 id = "2.0.2"
 date = "2026-10-30"
 title = "Usage reads on Linux again; the Inbox counts what it lists"

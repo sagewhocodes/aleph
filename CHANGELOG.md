@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.1.0 — in progress
+
+### The remaining fixes
+- **Compaction has its own state.** A session compacting shows "compacting" and stays working, and the end of a
+  compaction no longer counts as a finished turn.
+- **Forms of questions are walked page by page.** The approval board shows which page you're on, its tick boxes and the
+  Submit page; Tab and shift+Tab move between pages. A form is one question, so a new page never reads as answered.
+  `Y` skips forms, and on the phone a form says to open it in Aleph.
+- **The model is on every session row:** name, model, state, folder, then tokens, context, cost and time.
+- **Agents outside herdr show their own usage,** read from the conversation they have open, and how long they've run.
+  They no longer borrow a herdr session's numbers.
+- **When an agent exits by itself, its pane closes** (`close.exited`, default `close`), if nothing but the shell is left.
+- **The expanded Fleet names every GPU.** Each has its own line with its whole model. Spare rows show GPU detail, the
+  machine, network and disks, and agents and services, and a GPU tool that failed says so.
+- Usage's Overview fills a tall screen.
+- Started and ended events leave the Inbox and the toasts by default (`inbox.lifecycle` brings them back).
+- No ping for this computer: a slow local poll can't mark it degraded.
+- No Services page when `services` is off.
+
 ## 2.0.2 — 2026-10-30
 - **Usage reads on Linux again.** In 2.0.1 a mistake in the log reader made mawk, the default awk on Ubuntu and
   Debian, refuse it, so those machines recorded no new usage while reporting success. Nothing is lost: what they
