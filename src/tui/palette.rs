@@ -35,6 +35,8 @@ pub(crate) enum Item {
     Refresh,
     Hub,
     NewOn(String),
+    /// the folder browser, for the machine's default agent
+    StartIn(String),
     Preset(String),
     Folder(String, String),
     QueueOn(String),
@@ -246,6 +248,16 @@ impl Palette {
             items.push((
                 Item::NewOn(h.alias.clone()),
                 format!("New session on {}", h.alias),
+                "action".into(),
+                c::ACCENT(),
+            ));
+            items.push((
+                Item::StartIn(h.alias.clone()),
+                format!(
+                    "Start {} in a folder on {}…",
+                    crate::agents::default_agent_for(&d.cfg, &h.alias).name,
+                    h.alias
+                ),
                 "action".into(),
                 c::ACCENT(),
             ));
@@ -895,6 +907,12 @@ pub(crate) fn run(d: &mut Dash, p: Palette) -> Option<Handoff> {
             }
         }
         Item::NewOn(h) => super::quick::open(d, &h),
+        Item::StartIn(h) => {
+            return Some(Handoff::Browse {
+                target: d.target_of(&h),
+                quick: None,
+            })
+        }
         Item::Folder(h, dir) => {
             d.mode = Mode::NewForm(super::forms::NewForm::new(d, &h, Some(&dir)))
         }

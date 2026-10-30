@@ -1,8 +1,9 @@
 //! Quick start (`n` on a machine): where — one of its herdr workspaces, a
-//! recent folder, a worktree, or the folder browser — and which agent (`/`
-//! searches them, the ones the machine has first). enter chooses (✓) and
-//! moves on; only `i` starts it (in the background, then selected) and `o`
-//! starts it in Focus. The
+//! recent folder, a worktree, or the folder browser — and which agent, or a
+//! plain terminal (`/` searches them, the ones the machine has first). enter
+//! on a place picks it (✓) and moves to the agent; enter on the agent starts
+//! it (in the background, then selected; a terminal opens to type into). `o`
+//! starts it in Focus, `i` starts it from either column. The
 //! close checklist (`x` on a machine): its sessions, ticked, one confirm.
 
 use super::{Bg, Dash, Handoff, Level, Mode, Pending};
@@ -54,8 +55,11 @@ pub(crate) struct QuickStart {
     worktree: bool,
     /// the where cursor was moved (else it follows the workspaces in)
     moved: bool,
-    /// chosen with enter: [where, agent] (✓)
-    chosen: [bool; 2],
+    /// the place enter picked (✓). More options keeps its folder
+    picked: Option<Place>,
+    /// the browser was asked for with the agent settled: start once the
+    /// folder is back (Some(true): in Focus)
+    after_browse: Option<bool>,
     /// `/`: what's typed to find an agent (the agent column shows matches)
     search: Option<super::forms::Field>,
 }
@@ -85,7 +89,8 @@ impl QuickStart {
             at: [0, 0],
             worktree: false,
             moved: false,
-            chosen: [false, false],
+            picked: None,
+            after_browse: None,
             search: None,
         }
     }
@@ -109,7 +114,7 @@ impl QuickStart {
             .iter()
             .enumerate()
             .filter_map(|(i, a)| {
-                let label = crate::agents::label(&a.id);
+                let label = name_of(&a.id);
                 let score = [label.as_str(), a.id.as_str()]
                     .iter()
                     .filter_map(|c| crate::fuzzy::score(&q, c).map(|x| x.0))
@@ -144,10 +149,7 @@ impl QuickStart {
             KeyCode::Enter => {
                 if cur.is_some() {
                     close(self, cur);
-                    self.chosen[1] = true;
-                    if !self.chosen[0] {
-                        self.col = 0;
-                    }
+                    return self.go(self.opens_on_enter());
                 }
             }
             KeyCode::Up => self.at[1] = self.at[1].saturating_sub(1),
@@ -167,6 +169,35 @@ impl QuickStart {
         QuickRes::Keep
     }
 
+    /// Start what's under the cursors. Browse first asks for the folder.
+    fn go(&mut self, focus: bool) -> QuickRes {
+        if self.place() == Some(Place::Browse) {
+            self.after_browse = Some(focus);
+            return QuickRes::Browse;
+        }
+        QuickRes::Start { focus }
+    }
+
+    /// A terminal is for typing into: enter opens it. An agent starts in the
+    /// background, and its row is selected.
+    fn opens_on_enter(&self) -> bool {
+        self.agent().is_some_and(|a| a.id == crate::agents::SHELL)
+    }
+
+    /// The browser's answer can start straight away: the agent is settled and
+    /// there's nothing to install first.
+    pub fn starts_after_browse(&self) -> Option<bool> {
+        self.after_browse.filter(|_| {
+            self.agent()
+                .is_some_and(|a| a.installed || a.id == crate::agents::SHELL)
+        })
+    }
+
+    /// What the browser's labels call the agent.
+    pub fn agent_name(&self) -> Option<String> {
+        self.agent().map(|a| name_of(&a.id))
+    }
+
     /// The folder the browser came back with: chosen, the agent next.
     pub fn choose_folder(&mut self, dir: &str) {
         self.folders.retain(|f| f != dir);
@@ -179,7 +210,7 @@ impl QuickStart {
             self.at[0] = i;
         }
         self.moved = true;
-        self.chosen[0] = true;
+        self.picked = self.place();
         self.col = 1;
     }
 
@@ -255,37 +286,33 @@ impl QuickStart {
                 self.search = Some(super::forms::Field::default());
                 self.at[1] = 0;
             }
-            // enter chooses (and moves on); it never starts anything
+            // enter on a place picks it and moves on to the agent
             KeyCode::Enter if self.col == 0 => match self.place() {
-                Some(Place::Browse) => return QuickRes::Browse,
+                Some(Place::Browse) => {
+                    self.after_browse = None;
+                    return QuickRes::Browse;
+                }
                 Some(Place::More) => return QuickRes::Start { focus: false },
-                Some(_) => {
-                    self.chosen[0] = true;
-                    // chosen: the machine's answer arriving late can't move it
+                Some(p) => {
+                    self.picked = Some(p);
+                    // picked: the machine's answer arriving late can't move it
                     self.moved = true;
                     self.col = 1;
                 }
                 None => {}
             },
-            KeyCode::Enter => {
-                self.chosen[1] = true;
-                if !self.chosen[0] {
-                    self.col = 0;
-                }
-            }
-            // i starts (o: and opens it in Focus)
-            KeyCode::Char('i') | KeyCode::Char('o') if self.place() == Some(Place::Browse) => {
-                return QuickRes::Browse
-            }
-            KeyCode::Char('i') => return QuickRes::Start { focus: false },
-            KeyCode::Char('o') => return QuickRes::Start { focus: true },
+            // enter on the agent starts it
+            KeyCode::Enter => return self.go(self.opens_on_enter()),
+            // i starts from either column (o: and opens it in Focus)
+            KeyCode::Char('i') => return self.go(false),
+            KeyCode::Char('o') => return self.go(true),
             KeyCode::Up | KeyCode::Char('k') => {
                 self.at[self.col] = self.at[self.col].saturating_sub(1);
-                self.moved |= self.col == 0;
+                self.moved_cursor();
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.at[self.col] = (self.at[self.col] + 1).min(n[self.col].saturating_sub(1));
-                self.moved |= self.col == 0;
+                self.moved_cursor();
             }
             KeyCode::Left | KeyCode::Char('h') => self.col = 0,
             KeyCode::Right | KeyCode::Char('l') => self.col = 1,
@@ -294,6 +321,18 @@ impl QuickStart {
             _ => {}
         }
         QuickRes::Keep
+    }
+
+    /// The where cursor moved: another real place takes the pick's place.
+    /// (Passing over Browse or More keeps it: More options carries its folder.)
+    fn moved_cursor(&mut self) {
+        if self.col != 0 {
+            return;
+        }
+        self.moved = true;
+        if !matches!(self.place(), Some(Place::Browse | Place::More)) {
+            self.picked = None;
+        }
     }
 
     pub(crate) fn place(&self) -> Option<Place> {
@@ -353,7 +392,7 @@ impl QuickStart {
         let skip = self.at[0].saturating_sub(left_room(a.height, &self.workspaces));
         for (i, p) in places.iter().enumerate().skip(skip) {
             let on = i == self.at[0];
-            let tick = on && self.chosen[0];
+            let tick = self.picked.as_ref() == Some(p);
             let (glyph, text, note) = match p {
                 Place::Workspace(ws) => (
                     "▣",
@@ -429,9 +468,11 @@ impl QuickStart {
             .skip(skip)
         {
             let on = i == self.at[1];
-            let label = crate::agents::label(&a_.id).to_string();
+            let label = name_of(&a_.id);
             let note = match (a_.installed, a_.integrated) {
-                (false, _) if a_.id == crate::agents::SHELL => "a plain shell".to_string(),
+                (false, _) if a_.id == crate::agents::SHELL => {
+                    "no agent, just your shell".to_string()
+                }
                 (false, _) => "not installed".into(),
                 (true, Some(false)) => format!("{} · no herdr integration", a_.version),
                 (true, _) => a_.version.clone(),
@@ -440,12 +481,6 @@ impl QuickStart {
             // the agent's own mark in its colour, ahead of the name
             l.spans.insert(1, crate::icons::agent(&a_.id));
             l.spans.insert(2, Span::raw(" "));
-            if on && self.chosen[1] {
-                l.spans.push(Span::styled(
-                    "  ✓",
-                    ui::fg(c::GREEN()).add_modifier(Modifier::BOLD),
-                ));
-            }
             right.push(l);
         }
         match d.agents.status(&self.host) {
@@ -467,24 +502,38 @@ impl QuickStart {
         let install = self
             .agent()
             .is_some_and(|a| !a.installed && a.id != crate::agents::SHELL);
+        // what enter does on the agent column, from where the cursors are
+        let start = match self.place() {
+            Some(Place::Browse) => "pick a folder, then start",
+            Some(Place::More) => "more options",
+            _ if install => "install it there first",
+            _ if self.opens_on_enter() => "open it",
+            _ => "start",
+        };
         let mut hints = if self.search.is_some() {
             vec![
                 ("type", "search"),
                 ("↑↓", "pick"),
-                ("enter", "choose"),
+                ("enter", start),
                 ("esc", "all agents"),
             ]
-        } else if install {
+        } else if let (0, Some(Place::Browse)) = (self.col, self.place()) {
+            vec![("enter", "browse"), ("/", "search"), ("←→", "column")]
+        } else if let (0, Some(Place::More)) = (self.col, self.place()) {
+            vec![("enter", "more options"), ("/", "search"), ("←→", "column")]
+        } else if self.col == 0 {
             vec![
-                ("enter", "choose"),
-                ("i", "install it there first"),
+                ("enter", "next: the agent"),
+                ("i", "start"),
+                ("o", "start + Focus"),
                 ("/", "search"),
                 ("←→", "column"),
             ]
+        } else if install {
+            vec![("enter", start), ("/", "search"), ("←→", "column")]
         } else {
             vec![
-                ("enter", "choose"),
-                ("i", "start"),
+                ("enter", start),
                 ("o", "start + Focus"),
                 ("/", "search"),
                 ("←→", "column"),
@@ -511,6 +560,15 @@ impl QuickStart {
 fn left_room(h: u16, ws: &Option<Result<Vec<Workspace>, String>>) -> usize {
     let extra = 1 + usize::from(!matches!(ws, Some(Ok(_))));
     (h as usize).saturating_sub(extra + 1).max(1)
+}
+
+/// An entry in the agent column: a plain shell reads as a terminal.
+fn name_of(id: &str) -> String {
+    if id == crate::agents::SHELL {
+        "Terminal".into()
+    } else {
+        crate::agents::label(id)
+    }
 }
 
 fn short(d: &Dash, host: &str, p: &str) -> String {
@@ -652,38 +710,32 @@ pub(crate) fn open(d: &mut Dash, host: &str) {
     d.mode = Mode::Quick(q);
 }
 
-/// i / o in Quick start.
+/// Start what Quick start has under its cursors.
 pub(crate) fn start(d: &mut Dash, q: QuickStart, focus: bool) -> Option<Handoff> {
     let host = q.host.clone();
     let (Some(place), Some(agent)) = (q.place(), q.agent().cloned()) else {
         return None;
     };
-    let dir = match &place {
+    let folder = |p: &Place| match p {
         Place::Folder(p) => Some(p.clone()),
         Place::Worktree(w) => Some(w.path.clone()),
         _ => None,
     };
+    // the form has its own agent list: nothing to install yet
+    if place == Place::More {
+        let dir = q.picked.as_ref().and_then(folder);
+        let mut nf = super::forms::NewForm::new(d, &host, dir.as_deref());
+        nf.set_agent(&agent.id);
+        d.mode = Mode::NewForm(nf);
+        return None;
+    }
+    let dir = folder(&place);
     if !agent.installed && agent.id != crate::agents::SHELL {
         return Some(Handoff::Install {
             agent: agent.id,
             host,
             dir,
         });
-    }
-    match place {
-        Place::Browse => {
-            return Some(Handoff::Browse {
-                target: d.target_of(&host),
-                quick: Some(Box::new(q)),
-            })
-        }
-        Place::More => {
-            let mut nf = super::forms::NewForm::new(d, &host, None);
-            nf.set_agent(&agent.id);
-            d.mode = Mode::NewForm(nf);
-            return None;
-        }
-        _ => {}
     }
     let mut o = match crate::cli::parse_new(&["--host".into(), host.clone()], &d.cfg) {
         Ok(x) => x.opts,

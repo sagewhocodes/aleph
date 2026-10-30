@@ -190,6 +190,10 @@ pub struct App {
     color: Color,
     /// what enter starts (`Claude Code`, `Codex`, …)
     agent: String,
+    /// Quick start asked for a folder: `i` hands one back, nothing starts here
+    choosing: bool,
+    /// `t` was the key that picked: a terminal, not an agent
+    want_terminal: bool,
     ttl: u64,
     pub cache: Cache,
     rules: ignore::Rules,
@@ -290,6 +294,8 @@ impl App {
             } else {
                 o.agent.clone()
             },
+            choosing: o.choosing,
+            want_terminal: false,
             ttl: o.ttl,
             cache,
             globs: rules.prune_globs(),
@@ -418,6 +424,11 @@ impl App {
             return;
         };
         match row.kind {
+            // picking a folder isn't starting anything: enter takes it
+            Kind::Here if self.choosing => {
+                self.want_terminal = false;
+                self.pick(r);
+            }
             Kind::Here => self.note(format!("i starts {} in this folder", self.agent)),
             Kind::Up => self.up(r),
             Kind::Dir if row.denied => self.error(format!("{}: no access", path::show(&row.name))),
@@ -487,6 +498,11 @@ impl App {
             return;
         }
         self.settle = None;
+        // a terminal is a new thing to type in, whoever else runs there
+        if self.want_terminal {
+            self.done = Some(Some(Picked::Terminal(target)));
+            return;
+        }
         let mut here: Vec<Session> = self.sessions_in(&target).into_iter().cloned().collect();
         if here.is_empty() && real != target {
             here = self.sessions_in(&real).into_iter().cloned().collect();
@@ -1084,7 +1100,14 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') => self.done = Some(None),
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => self.open(r),
             KeyCode::Left | KeyCode::Backspace | KeyCode::Char('h') => self.up(r),
-            KeyCode::Char('i') => self.enter(r),
+            KeyCode::Char('i') => {
+                self.want_terminal = false;
+                self.enter(r);
+            }
+            KeyCode::Char('t') => {
+                self.want_terminal = true;
+                self.enter(r);
+            }
             KeyCode::Char('n') => {
                 if self.cwd.is_some() {
                     self.naming = Some(String::new());
@@ -1472,6 +1495,10 @@ impl App {
     fn row_item(&self, row: &Row, iw: usize) -> ListItem<'static> {
         let (left, lstyle): (String, Style) = match row.kind {
             Kind::Recent => (format!("★ {}", self.pretty(&row.name)), ui::fg(c::YELLOW())),
+            Kind::Here if self.choosing => (
+                format!("✓ Use {}", self.enter_label(row)),
+                ui::fg(c::ACCENT()).add_modifier(Modifier::BOLD),
+            ),
             Kind::Here => (
                 format!("✻ Start {} in {}", self.agent, self.enter_label(row)),
                 ui::fg(c::ACCENT()).add_modifier(Modifier::BOLD),
@@ -1570,7 +1597,11 @@ impl App {
                     if self.searching {
                         "type to search · /path or ~/ to jump ▏"
                     } else {
-                        "/ search · enter opens · i starts here · n new folder "
+                        if self.choosing {
+                            "/ search · enter opens · i uses it · t terminal · n new folder "
+                        } else {
+                            "/ search · enter opens · i starts here · t terminal · n new folder "
+                        }
                     },
                     ui::faint(),
                 ),
@@ -2047,7 +2078,15 @@ impl App {
             let jump = self.filter().0.is_some();
             ui::hints_fit(
                 &[
-                    ("i", "start agent"),
+                    (
+                        "i",
+                        if self.choosing {
+                            "use this folder"
+                        } else {
+                            "start agent"
+                        },
+                    ),
+                    ("t", "terminal"),
                     ("enter →", "open"),
                     ("←", "back"),
                     ("/", "search"),
@@ -2068,10 +2107,12 @@ impl App {
                     ),
                     (
                         "esc",
-                        if self.query.is_empty() {
-                            "quit"
-                        } else {
+                        if !self.query.is_empty() {
                             "clear"
+                        } else if self.choosing {
+                            "back"
+                        } else {
+                            "quit"
                         },
                     ),
                 ],
@@ -2182,6 +2223,8 @@ pub struct BrowseOpts {
     pub color: ratatui::style::Color,
     /// what enter starts, for the labels (`Claude Code`, `Codex`, …)
     pub agent: String,
+    /// picking a folder for Quick start: `i` hands it back, nothing starts
+    pub choosing: bool,
 }
 
 impl BrowseOpts {
@@ -2206,6 +2249,7 @@ impl BrowseOpts {
             agent: crate::agents::default_agent_for(cfg, &t.ssh)
                 .name
                 .to_string(),
+            choosing: false,
         }
     }
 }
@@ -2218,6 +2262,8 @@ pub enum Picked {
     New(Vec<u8>),
     /// a session already runs there and the user chose to attach to it
     Attach(Session),
+    /// `t`: a terminal in this folder
+    Terminal(Vec<u8>),
 }
 
 /// Run the browser on an already-open screen. Returns the chosen remote
@@ -2613,6 +2659,57 @@ mod tests {
         for ch in s.chars() {
             key(a, r, KeyCode::Char(ch));
         }
+    }
+
+    /// `t`: a terminal in the folder, even beside a running agent. Picking for
+    /// Quick start says so: nothing starts here, and enter takes the folder.
+    #[test]
+    fn t_opens_a_terminal_and_choosing_only_hands_a_folder_back() {
+        let mut r = dead();
+        let s = Session {
+            name: "ignite".into(),
+            label: "claude_ignite:proj".into(),
+            cwd: "/home/u/proj/".into(),
+            ..Default::default()
+        };
+        let mut a = app(vec![s]);
+        open(&mut a, &mut r, "/home/u", &["proj", "notes"]);
+        key(&mut a, &mut r, KeyCode::Char('t'));
+        let (id, t) = a.choose.clone().unwrap();
+        assert_eq!(t, b"/home/u/proj");
+        a.on_remote(
+            Ev::Stat {
+                id,
+                res: Ok((1, t.clone())),
+            },
+            &mut r,
+        );
+        assert!(a.ask.is_none());
+        assert!(matches!(&a.done, Some(Some(Picked::Terminal(p))) if p == b"/home/u/proj"));
+
+        let mut a = app(vec![]);
+        a.choosing = true;
+        open(&mut a, &mut r, "/home/u", &["proj", "notes"]);
+        a.sel = a
+            .rows()
+            .0
+            .iter()
+            .position(|x| x.kind == Kind::Here)
+            .unwrap();
+        let sc = screen(&mut a, 120, 20);
+        assert!(sc.contains("Use u") && !sc.contains("Start Codex"), "{sc}");
+        assert!(sc.contains("use this folder"), "{sc}");
+        key(&mut a, &mut r, KeyCode::Enter);
+        let (id, t) = a.choose.clone().unwrap();
+        assert_eq!(t, b"/home/u");
+        a.on_remote(
+            Ev::Stat {
+                id,
+                res: Ok((1, t.clone())),
+            },
+            &mut r,
+        );
+        assert!(matches!(&a.done, Some(Some(Picked::New(p))) if p == b"/home/u"));
     }
 
     #[test]

@@ -3111,7 +3111,12 @@ pub(crate) const ACTS: &[(Act, &str, &str, &str)] = &[
         "N",
         "a note on the session (#tags; kept after it ends)",
     ),
-    (Act::Browse, "browse", "i", "new session in a folder…"),
+    (
+        Act::Browse,
+        "browse",
+        "i",
+        "start the machine's default agent in a folder…",
+    ),
     (
         Act::Wall,
         "wall",
@@ -3650,18 +3655,36 @@ pub fn run_dashboard_in(tui: Tui, cfg: Config, start: Start) -> std::process::Ex
             Handoff::Browse { target, quick } => {
                 let mut bo = crate::browse::BrowseOpts::from_config(&d.cfg, target);
                 bo.sessions = d.fleet.host(&target.ssh).map(|h| h.sessions.clone());
+                if let Some(q) = quick {
+                    // the agent's settled: the browser starts it, as it says.
+                    // Otherwise it only hands a folder back
+                    bo.choosing = q.starts_after_browse().is_none();
+                    if let Some(a) = q.agent_name() {
+                        bo.agent = a;
+                    }
+                }
                 let col = bo.color;
                 match crate::browse::run(&mut tui, target, bo) {
-                    // from Quick start: back there with the folder chosen
+                    // from Quick start: back there with the folder picked, or
+                    // on to the start when the agent's settled
                     Ok(Some(crate::browse::Picked::New(dir))) if quick.is_some() => {
                         if let Some(q) = quick {
                             let mut q = (**q).clone();
                             q.choose_folder(&crate::path::show(&dir));
-                            d.mode = Mode::Quick(q);
+                            match q.starts_after_browse() {
+                                Some(focus) => {
+                                    let _ = quick::start(&mut d, q, focus);
+                                }
+                                None => d.mode = Mode::Quick(q),
+                            }
                         }
                     }
+                    Ok(Some(crate::browse::Picked::Terminal(dir))) => {
+                        quick::shell(&mut d, &target.ssh, Some(&crate::path::show(&dir)));
+                    }
                     Ok(Some(crate::browse::Picked::New(dir))) => {
-                        let mut o = match crate::cli::parse_new(&[], &d.cfg) {
+                        let args = ["--host".to_string(), target.ssh.clone()];
+                        let mut o = match crate::cli::parse_new(&args, &d.cfg) {
                             Ok(x) => x.opts,
                             Err(e) => {
                                 d.flash(e, true);
@@ -3690,7 +3713,12 @@ pub fn run_dashboard_in(tui: Tui, cfg: Config, start: Start) -> std::process::Ex
                         tui = t2;
                         d.landed(target, r);
                     }
-                    Ok(None) => {}
+                    // esc: back in Quick start, as it was
+                    Ok(None) => {
+                        if let Some(q) = quick {
+                            d.mode = Mode::Quick((**q).clone());
+                        }
+                    }
                     Err(e) => d.flash(format!("folder browser: {e}"), true),
                 }
                 d.after_handoff(&h);

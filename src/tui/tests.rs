@@ -500,50 +500,116 @@ fn monitor_usage_renders() {
     assert!(!s.contains("OpenRouter"), "{s}");
 }
 
+/// Enter on the place moves on, enter on the agent starts: no second key to
+/// learn, and nothing starts before both are settled.
 #[test]
-fn quick_start_enter_chooses_and_only_i_starts() {
-    use super::quick::{QuickRes, QuickStart};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+fn quick_start_enter_takes_the_place_then_starts_the_agent() {
+    use super::quick::{Place, QuickRes, QuickStart};
     let d = dash();
-    let mut q = QuickStart::new(&d, "b31");
+    let mut q = QuickStart::new(&d, "b31").with_folders(&["/home/u/proj", "/home/u/other"]);
     q.loaded(Ok(vec![]), vec![]);
-    let k = |c| KeyEvent::new(c, KeyModifiers::NONE);
-    // a folder (or the first place), then an agent: enter never starts
-    q.choose_folder("/home/u/proj");
+    let ch = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
     assert!(matches!(q.key(k(KeyCode::Enter)), QuickRes::Keep));
-    assert!(matches!(q.key(k(KeyCode::Left)), QuickRes::Keep));
-    assert!(matches!(q.key(k(KeyCode::Enter)), QuickRes::Keep));
-    // i starts, o starts in Focus
+    assert_eq!(q.place(), Some(Place::Folder("/home/u/proj".into())));
     assert!(matches!(
-        q.key(k(KeyCode::Char('i'))),
+        q.key(k(KeyCode::Enter)),
         QuickRes::Start { focus: false }
     ));
-    assert!(matches!(
-        q.key(k(KeyCode::Char('o'))),
-        QuickRes::Start { focus: true }
-    ));
-    // enter on "Browse folders" opens the browser (its folder comes back here)
-    let browse = q
-        .places()
-        .iter()
-        .position(|p| *p == super::quick::Place::Browse)
-        .unwrap();
+    // o: the same, in Focus; i: from either column
+    assert!(matches!(q.key(ch('o')), QuickRes::Start { focus: true }));
     q.key(k(KeyCode::Left));
-    for _ in 0..20 {
-        q.key(k(KeyCode::Up));
-    }
-    for _ in 0..browse {
+    assert!(matches!(q.key(ch('i')), QuickRes::Start { focus: false }));
+    // moving the cursor is moving the place: the start follows it
+    q.key(k(KeyCode::Down));
+    assert_eq!(q.place(), Some(Place::Folder("/home/u/other".into())));
+    assert!(matches!(q.key(ch('i')), QuickRes::Start { focus: false }));
+    // enter on Browse opens it and comes back to choose the agent
+    while q.place() != Some(Place::Browse) {
         q.key(k(KeyCode::Down));
     }
     assert!(matches!(q.key(k(KeyCode::Enter)), QuickRes::Browse));
+    assert_eq!(q.starts_after_browse(), None);
+    // with the agent settled first, the browser's folder starts it
+    q.key(k(KeyCode::Right));
+    assert!(matches!(q.key(k(KeyCode::Enter)), QuickRes::Browse));
+    assert_eq!(q.starts_after_browse(), Some(false));
+    q.choose_folder("/home/u/found");
+    assert_eq!(q.place(), Some(Place::Folder("/home/u/found".into())));
+    // the footer says what enter does in each column
     let mut d = d;
-    super::quick::open(&mut d, "b31");
+    q.key(k(KeyCode::Left));
+    d.mode = Mode::Quick(q);
     let s = render(&mut d, 120, 30);
-    assert!(s.contains("choose") && s.contains("start + Focus"), "{s}");
+    assert!(
+        s.contains("next: the agent") && s.contains("start + Focus"),
+        "{s}"
+    );
+    assert!(s.contains("Terminal") && s.contains("✓"), "{s}");
+    d.on_key(k(KeyCode::Right));
+    let s = render(&mut d, 120, 30);
+    assert!(!s.contains("next: the agent"), "{s}");
+}
+
+/// `i` and the palette say which agent starts, and it's the machine's own.
+#[test]
+fn i_names_the_agent_it_starts() {
+    let mut d = dash();
+    let _ = d.cfg.set("host.b31.agent", "codex");
+    d.fv.sel = Some(fleet::RowId::Host("b31".into()));
+    let h = fleet::hints(&d);
+    assert!(h.contains(&("i", "start Codex in a folder")), "{h:?}");
+    let args = ["--host".to_string(), "b31".to_string()];
+    let o = crate::cli::parse_new(&args, &d.cfg).unwrap().opts;
+    assert_eq!(o.agent, "codex");
+    d.mode = Mode::Palette(super::palette::Palette::new(&d));
+    for c in "codex in".chars() {
+        d.on_key(k(KeyCode::Char(c)));
+    }
+    let s = render(&mut d, 140, 40);
+    assert!(s.contains("Start Codex in a folder on b31"), "{s}");
+}
+
+/// A terminal is a choice like any agent, and enter opens it where you said.
+#[test]
+fn quick_start_opens_a_terminal_where_you_picked() {
+    use super::quick::{Place, QuickRes, QuickStart};
+    let d = dash();
+    let mut q = QuickStart::new(&d, "b31").with_folders(&["/home/u/proj"]);
+    q.loaded(Ok(vec![]), vec![]);
+    let ch = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+    q.key(k(KeyCode::Enter));
+    q.key(ch('/'));
+    for c in "term".chars() {
+        q.key(ch(c));
+    }
+    assert_eq!(q.agent_id(), Some(crate::agents::SHELL));
+    assert!(matches!(
+        q.key(k(KeyCode::Enter)),
+        QuickRes::Start { focus: true }
+    ));
+    assert_eq!(q.place(), Some(Place::Folder("/home/u/proj".into())));
+}
+
+/// More options carries the folder that was picked, and the agent.
+#[test]
+fn more_options_keeps_the_folder_you_picked() {
+    use super::quick::{Place, QuickStart};
+    let mut d = dash();
+    let mut q = QuickStart::new(&d, "b31").with_folders(&["/home/u/proj"]);
+    q.loaded(Ok(vec![]), vec![]);
+    q.key(k(KeyCode::Enter));
+    q.key(k(KeyCode::Left));
+    while q.place() != Some(Place::More) {
+        q.key(k(KeyCode::Down));
+    }
+    assert!(super::quick::start(&mut d, q, false).is_none());
+    assert!(matches!(d.mode, Mode::NewForm(_)));
+    let s = render(&mut d, 140, 40);
+    assert!(s.contains("/home/u/proj"), "{s}");
 }
 
 /// `/` in Quick start searches the agents: letters are the search's (not
-/// the launcher's keys), the machine's own agents first, enter chooses.
+/// the launcher's keys), the machine's own agents first, enter starts.
 #[test]
 fn quick_start_searches_the_agents() {
     use super::quick::{QuickRes, QuickStart};
@@ -564,10 +630,12 @@ fn quick_start_searches_the_agents() {
         q.key(ch(c));
     }
     assert_eq!(q.agent_id(), Some("gemini"));
-    // enter chooses it and closes the search; i then starts (installs) it
-    assert!(matches!(q.key(k(KeyCode::Enter)), QuickRes::Keep));
+    // enter closes the search and starts (here: installs) it
+    assert!(matches!(
+        q.key(k(KeyCode::Enter)),
+        QuickRes::Start { focus: false }
+    ));
     assert_eq!(q.agent_id(), Some("gemini"));
-    assert!(matches!(q.key(ch('i')), QuickRes::Start { focus: false }));
     // what the machine has (here: its default, Claude Code) comes first in
     // a search, ahead of better-matching names; esc gives the column back
     q.key(ch('/'));

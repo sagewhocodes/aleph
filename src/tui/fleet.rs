@@ -9,7 +9,7 @@ use crate::{ansi, fuzzy, icons, telemetry};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Paragraph};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -1093,6 +1093,17 @@ pub(crate) fn close_what(d: &Dash) -> String {
     )
 }
 
+/// What `i` says on a machine: it starts that machine's default agent, by name.
+/// Hints are static, so each wording is kept once (there are only so many agents).
+pub(crate) fn folder_hint(d: &Dash, host: &str) -> &'static str {
+    static SAID: std::sync::Mutex<BTreeMap<&'static str, &'static str>> =
+        std::sync::Mutex::new(BTreeMap::new());
+    let name = crate::agents::default_agent_for(&d.cfg, host).name;
+    let mut said = SAID.lock().unwrap_or_else(|e| e.into_inner());
+    said.entry(name)
+        .or_insert_with(|| Box::leak(format!("start {name} in a folder").into_boxed_str()))
+}
+
 pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
     if d.fv.filtering {
         return vec![("enter", "keep filter"), ("esc", "clear"), ("↑↓", "move")];
@@ -1108,15 +1119,15 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
         ];
     }
     match selected(d) {
-        Some(RowId::Host(_)) => vec![
+        Some(RowId::Host(h)) => vec![
             ("n", "new here"),
+            ("i", folder_hint(d, &h)),
             ("e", "edit"),
             ("T", "test"),
             ("Z", "pause"),
             ("*", "default"),
             ("+", "add machine"),
             ("-", "remove"),
-            ("i", "browse"),
             ("ctrl+k", "palette"),
         ],
         Some(RowId::Others) => vec![

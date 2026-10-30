@@ -886,7 +886,7 @@ pub(crate) fn view(d: &Dash, f: &mut Frame, r: Rect, alias: &str) -> Vec<(Rect, 
         tail.push(Line::raw(""));
     }
     tail.push(ui::hints(&[
-        ("i", "browse"),
+        ("i", super::fleet::folder_hint(d, alias)),
         ("b", "broadcast"),
         (super::digit(super::View::Monitor), "monitor"),
         ("H", "hub"),

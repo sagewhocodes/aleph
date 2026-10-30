@@ -96,7 +96,7 @@ aleph doctor                         # check everything
 | Key | Does |
 |---|---|
 | `enter` | Focus on a session |
-| `n` · `i` | New session · browse folders |
+| `n` · `i` | New session (place, then agent or terminal) · start the machine's default agent in a folder |
 | `w` · `y` | Tile · approve |
 | `ctrl+a` · `ctrl+k` | Approvals · palette |
 | `ctrl+q` | Keys back to Aleph, then back to Fleet |

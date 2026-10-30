@@ -716,6 +716,20 @@ fn browse_cmd(a: Args) -> ExitCode {
             );
             cli::launched(&a.cfg, &t, tui, o)
         }
+        // t: the same with no agent, a terminal in that folder
+        Ok(Some(browse::Picked::Terminal(d))) => {
+            na.opts.agent = agents::SHELL.into();
+            na.opts.dir = Some(d);
+            cli::fill_names(&mut na.opts);
+            let (tui, o) = launch::run(
+                tui,
+                &t,
+                launch::Job::New(na.opts),
+                false,
+                theme::machine(&a.cfg, &t.ssh),
+            );
+            cli::launched(&a.cfg, &t, tui, o)
+        }
         Ok(Some(browse::Picked::Attach(s))) => {
             let (tui, o) = launch::run(
                 tui,
