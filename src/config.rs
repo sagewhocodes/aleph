@@ -289,7 +289,7 @@ pub const KNOWN: &[Known] = &[
         key: "stats",
         default: "on",
         kind: Kind::Choice(&["on", "selected", "off"]),
-        help: "live machine stats (CPU, GPU, memory) in the dashboard",
+        help: "live machine stats (CPU, GPU, memory) in the dashboard; off: none, and no history kept either",
     },
     Known {
         key: "stats_interval",

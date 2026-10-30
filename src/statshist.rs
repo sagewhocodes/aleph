@@ -266,6 +266,20 @@ pub fn keep_buckets(cfg: &Config, host: &str) -> usize {
     (hours * 3600.0 / COARSE as f64) as usize
 }
 
+/// The machines with a stream kept for their history: none with `stats = off`, and
+/// never a paused one (Aleph doesn't talk to those) or one keeping nothing.
+pub fn wanted(cfg: &Config, hosts: &[String]) -> Vec<String> {
+    if cfg.get_or("stats") == "off" {
+        return Vec::new();
+    }
+    hosts
+        .iter()
+        .filter(|h| keep_buckets(cfg, h) > 0)
+        .filter(|h| cfg.host_get(h, "paused").is_none_or(|v| v != "true"))
+        .cloned()
+        .collect()
+}
+
 /// A sample has just finished: put each series' newest value in the rings.
 pub fn record(host: &str, ts: u64, st: &mut Stats) {
     let mut g = store().lock().unwrap();
@@ -503,24 +517,21 @@ impl Keeper {
             return;
         }
         self.checked = now;
-        let mut want: Vec<&String> = Vec::new();
-        for h in hosts {
+        let want = wanted(cfg, hosts);
+        for h in &want {
             let keep = keep_buckets(cfg, h);
-            if keep > 0 {
-                want.push(h);
-                let mut g = store().lock().unwrap();
-                let m = g.entry(h.clone()).or_default();
-                let first = m.keep == 0;
-                m.set_keep(keep);
-                drop(g);
-                // where the log left off, before anything's written after it
-                if first {
-                    read_log(h);
-                }
+            let mut g = store().lock().unwrap();
+            let m = g.entry(h.clone()).or_default();
+            let first = m.keep == 0;
+            m.set_keep(keep);
+            drop(g);
+            // where the log left off, before anything's written after it
+            if first {
+                read_log(h);
             }
         }
-        self.tele.retain(|h, _| want.contains(&h));
-        for h in want {
+        self.tele.retain(|h, _| want.contains(h));
+        for h in &want {
             self.tele
                 .entry(h.clone())
                 .or_insert_with(|| Telemetry::start(h, KEEP_EVERY));
@@ -748,6 +759,15 @@ mod tests {
         assert_eq!(keep_buckets(&cfg, "b31"), 240);
         let off = Config::in_memory(&["stats_keep_hours=0"]);
         assert_eq!(keep_buckets(&off, "gpu2"), 0);
+    }
+
+    #[test]
+    fn only_machines_it_may_talk_to_have_a_stream() {
+        let hosts = ["b31".to_string(), "gpu2".to_string(), "c3".to_string()];
+        let cfg = Config::in_memory(&["host.gpu2.paused=true", "host.c3.stats_keep_hours=0"]);
+        assert_eq!(wanted(&cfg, &hosts), vec!["b31".to_string()]);
+        let off = Config::in_memory(&["stats=off"]);
+        assert!(wanted(&off, &hosts).is_empty());
     }
 
     #[test]

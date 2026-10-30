@@ -87,7 +87,7 @@ dashboard's Settings tab edits them. Per-machine settings are `host.<alias>.<key
 | `ssh_host` | `fleet.default` | — | default ssh alias |
 | `machine` | `fleet.herdr_machine` | — | herdr machine label for the default host |
 | `hosts` | `fleet.machines` | — | machines shown together (comma-separated); empty = the default host |
-| `stats` | `stats.mode` | `on` (on \| selected \| off) | live machine stats (CPU, GPU, memory) in the dashboard |
+| `stats` | `stats.mode` | `on` (on \| selected \| off) | live machine stats (CPU, GPU, memory) in the dashboard; off: none, and no history kept either |
 | `stats_interval` | `stats.interval` | `1` (number) | seconds between machine stat samples |
 | `stats_window` | `stats.window` | `30m` (5m \| 15m \| 30m \| 1h \| 3h \| 6h \| 12h) | how far back the resource graphs reach (+ - in Monitor) |
 | `stats_keep_hours` | `stats.keep_hours` | `12` (number) | hours of resource graphs to keep per machine, sampled by the daemon even with nothing open (0: only while a view shows them; one machine: host.<name>.stats_keep_hours) |

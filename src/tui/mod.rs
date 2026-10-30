@@ -843,17 +843,30 @@ impl Dash {
         let want: Vec<String> = if self.view == View::Monitor {
             // the Monitor compares every machine
             hosts
-        } else if !matches!(self.view, View::Fleet) {
-            if self.owner.0 && self.cfg.get_or("stats") != "off" {
-                hosts
+        } else {
+            // no daemon: the ones keeping a history, whatever's on screen
+            let keeping = if self.owner.0 {
+                crate::statshist::wanted(&self.cfg, &hosts)
             } else {
                 vec![]
-            }
-        } else {
-            match self.cfg.get_or("stats").as_str() {
-                "off" => vec![],
-                "selected" => self.fv.selected_host(self).into_iter().collect(),
-                _ => hosts,
+            };
+            if !matches!(self.view, View::Fleet) {
+                keeping
+            } else {
+                match self.cfg.get_or("stats").as_str() {
+                    "off" => vec![],
+                    "selected" => {
+                        let mut v: Vec<String> = self.fv.selected_host(self).into_iter().collect();
+                        v.extend(
+                            keeping
+                                .into_iter()
+                                .filter(|h| !v.contains(h))
+                                .collect::<Vec<_>>(),
+                        );
+                        v
+                    }
+                    _ => hosts,
+                }
             }
         };
         self.tele.retain(|a, _| want.contains(a));

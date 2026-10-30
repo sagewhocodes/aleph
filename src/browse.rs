@@ -436,6 +436,7 @@ impl App {
             // picking a folder isn't starting anything: enter takes it
             Kind::Here if self.choosing || self.terminal_only => {
                 self.want_terminal = self.terminal_only;
+                self.want_sdk = false;
                 self.pick(r);
             }
             Kind::Here => self.note(format!("i starts {} in this folder", self.agent)),
@@ -1127,13 +1128,16 @@ impl App {
             KeyCode::Left | KeyCode::Backspace | KeyCode::Char('h') => self.up(r),
             KeyCode::Char('i') => {
                 self.want_terminal = self.terminal_only;
+                self.want_sdk = false;
                 self.enter(r);
             }
             KeyCode::Char('t') => {
                 self.want_terminal = true;
+                self.want_sdk = false;
                 self.enter(r);
             }
             KeyCode::Char('S') if self.sdk_project() => {
+                self.want_terminal = false;
                 self.want_sdk = true;
                 self.enter(r);
             }
