@@ -4566,9 +4566,9 @@ fn ctrl_q_gives_the_keys_back_then_goes_to_fleet() {
     d.on_key(k(KeyCode::Esc));
     assert_eq!(d.view, View::Inbox, "esc goes back where it came from");
     // a key of your own (mux_leave) still gives the keys back
-    let _ = d.cfg.set("mux_leave", "f12");
+    let _ = d.cfg.set("mux_leave", "alt+q");
     wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
-    d.on_key(k(KeyCode::F(12)));
+    d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::ALT));
     assert!(!d.wall.typing && d.view == View::Wall);
     // zoomed for typing: the zoom goes when the keys do
     wall::type_into(&mut d, "b31|w1:p1", View::Fleet);
