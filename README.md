@@ -51,6 +51,7 @@ aleph doctor                         # check everything
 ## ✨ Features
 
 - 🛰️ **Fleet:** every machine and session, with state, folder, branch and live CPU, memory and GPU.
+- 📈 **Monitor:** twelve hours of each machine's graphs, kept even with nothing open; `+` `-` change the timescale.
 - ⌨️ **Focus:** type into an agent as in its own terminal; tile several side by side.
 - ✅ **Approvals:** `ctrl+a` shows every waiting question; answer one or all.
 - 💸 **Usage:** tokens, time and cost by account, project, machine, agent and model.
@@ -83,6 +84,8 @@ aleph doctor                         # check everything
 | Your machines, over ssh | Always |
 | ntfy, Slack or a webhook (a 140-character alert) | If you set one up |
 | OpenRouter (your key, to read spend) | If you add a key |
+| OpenRouter, models.dev, GitHub (public price lists, read with no login) | Hourly, from the daemon (`analytics.prices_sync = false` stops it) |
+| GitHub (this project's release, for the Raycast extension) | If you pick it in `aleph setup` without a checkout |
 
 ## 🖥️ The dashboard
 
@@ -102,6 +105,7 @@ aleph doctor                         # check everything
 | `ctrl+t` | A terminal in a folder you pick (`launch.<key>` binds your own: a folder, a preset) |
 | `ctrl+p` | The prompt library, by scenario and agent |
 | `G` | The turn view: `z` folds all, `Z` expands all, enter folds one (`t` in Monitor's Timeline) |
+| `M` `C` `O` `F` | In Monitor's Timeline: this machine · hide the conversation · organise · filter |
 | `ctrl+q` | Keys back to Aleph, then back to Fleet |
 | `[ ]` · `ctrl+[ ]` | Previous / next session, on any machine · machine (or `( )`) |
 | Drag | Select across a pane; copied when you let go (option+drag goes to the agent) |
@@ -117,6 +121,7 @@ aleph send ignite "run the tests"         # prompt one (--after idle queues it)
 aleph approve b31:temper                  # answer with its own "yes"
 aleph usage 7d --by account               # tokens, time and cost
 aleph timeline last                       # what the last conversation did
+aleph sdk dev ~/work/my-bot               # run a Cursor Agent SDK project as a session
 ```
 
 ## 🧩 Works with
@@ -137,6 +142,7 @@ aleph timeline last                       # what the last conversation did
   Linux needs `sh`, herdr and ssh.
 - Tested with herdr 0.9.5. Aleph itself runs on macOS (Apple silicon) and Linux.
 - OpenCode 1.x still runs, with a warning: its usage isn't tracked properly (`opencode upgrade --major`).
+- Cursor's Agent SDK runs as a session (`aleph sdk`), watched by what's running in its pane: no tokens or cost yet. 🟡
 
 <details>
 <summary><b>Setting up by hand</b></summary>
