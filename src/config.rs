@@ -1548,6 +1548,24 @@ pub const KNOWN: &[Known] = &[
         help: "how a session's timeline starts: smart (repeats folded, finished prompts closed to a line; the running one, errors and costly steps open), open (only repeats folded), folded (every section to its summary line)",
     },
     Known {
+        key: "timeline.mine",
+        default: "false",
+        kind: Kind::Bool,
+        help: "Monitor › Timeline lists only the machine on its strip (M); ctrl+[ ] moves to another",
+    },
+    Known {
+        key: "timeline.conversation",
+        default: "on",
+        kind: Kind::Choice(&["on", "off"]),
+        help: "Monitor › Timeline shows the selected conversation beside the list (C); G opens it whichever",
+    },
+    Known {
+        key: "timeline.group",
+        default: "machine",
+        kind: Kind::Choice(&["machine", "project", "agent", "account"]),
+        help: "what Monitor › Timeline groups its list by (O)",
+    },
+    Known {
         key: "timeline.words",
         default: "live",
         kind: Kind::Choice(&["live", "off"]),

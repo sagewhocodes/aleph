@@ -46,6 +46,7 @@ mod splashes;
 // each session's states over the last hours (Fleet `g`, Monitor › Timeline)
 mod timechart;
 mod timeline;
+mod timelist;
 mod tree_view;
 mod usage;
 mod usage_filters;
@@ -373,6 +374,8 @@ pub(crate) enum Mode {
     Journal(journal::JournalView),
     /// Usage's filters: a picker (period, agents, machines, projects)
     UsagePick(usage_filters::Picker),
+    /// Monitor › Timeline's filter
+    TimelinePick(usage_filters::Picker),
     /// Usage's custom from–to
     UsageCal(usage_filters::Cal),
 }
@@ -441,6 +444,8 @@ pub(crate) enum Chip {
     Check(usize),
     /// a Usage filter's chip
     Usage(usage_filters::UChip),
+    /// one of Monitor › Timeline's chips
+    Timeline(timelist::TChip),
 }
 
 pub struct Dash {
@@ -1599,6 +1604,14 @@ impl Dash {
                 }
                 return None;
             }
+            Mode::TimelinePick(mut p) => {
+                match p.key(k) {
+                    forms::Res::Keep => self.mode = Mode::TimelinePick(p),
+                    forms::Res::Cancel => {}
+                    forms::Res::Submit => timelist::apply(self, p),
+                }
+                return None;
+            }
             Mode::UsageCal(mut c) => {
                 if k.code == KeyCode::Esc {
                     return None;
@@ -1948,6 +1961,7 @@ impl Dash {
                     Chip::Section(i) => settings::set_section(self, i),
                     Chip::Check(i) => settings::click_check(self, i),
                     Chip::Usage(c) => usage_filters::click(self, c),
+                    Chip::Timeline(c) => timelist::click(self, c),
                 }
                 return None;
             }
@@ -2082,7 +2096,7 @@ impl Dash {
             Mode::Splashes(g) => splashes::draw(self, f, area, g),
             Mode::Race(v) => race::draw(self, f, area, v),
             Mode::Alerts(p) => alerts::draw(self, f, area, p),
-            Mode::UsagePick(p) => p.draw(f, area),
+            Mode::UsagePick(p) | Mode::TimelinePick(p) => p.draw(f, area),
             Mode::UsageCal(c) => c.draw(f, area),
             Mode::Journal(v) => journal::draw(self, f, area, v),
         }

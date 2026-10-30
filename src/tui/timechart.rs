@@ -7,12 +7,14 @@
 //!   rows, keys and layout stay as they are); the preview shows the selected
 //!   session's strip either way.
 //! * Monitor › Timeline (`t`): every session by machine, ended ones too, with
-//!   how long each worked and how often it needed you.
+//!   how long each worked and how often it needed you. `timelist` says which
+//!   sessions it lists and how they're grouped.
 //!
 //! The stretches that ended come from the state log (`statelog`, written by
 //! the hub); the one going on now from the fleet (`Session::since`). Time
 //! nobody watched (no hub ran) stays blank: nothing is made up.
 
+use super::timelist::{self, By, Facts};
 use super::Dash;
 use crate::herdr::Session;
 use crate::statelog::{self, St, Stretch};
@@ -42,6 +44,8 @@ pub(crate) struct State {
     pub sel: usize,
     pub scroll: usize,
     pub hide_ended: bool,
+    /// what the list is narrowed to (`F`)
+    pub narrow: timelist::Narrow,
     /// the last draw had room for the conversation beside the list
     beside: bool,
     /// the conversations of the last weeks (`timeline::sessions`), read off
@@ -367,6 +371,8 @@ const EARLIER_DAYS: u64 = 60;
 /// A row of Monitor › Timeline.
 enum Row {
     Host(String),
+    /// a group's heading, and how many rows it has (`timeline.group`)
+    Group(String, usize),
     /// the earlier conversations' heading
     Head(String),
     /// a project's heading among them
@@ -414,48 +420,149 @@ fn ended(d: &Dash, from: u64) -> Vec<(String, String, String, String)> {
     v.into_iter().map(|(_, h, n, a, k)| (h, n, a, k)).collect()
 }
 
-fn rows(d: &Dash, from: u64) -> Vec<Row> {
-    let gone = if d.tl.hide_ended {
-        Vec::new()
-    } else {
-        ended(d, from)
-    };
-    let mut v = Vec::new();
-    for h in &d.fleet.hosts {
-        let old: Vec<&(String, String, String, String)> =
-            gone.iter().filter(|x| x.0 == h.alias).collect();
-        if h.sessions.is_empty() && old.is_empty() {
-            continue;
-        }
-        v.push(Row::Host(h.alias.clone()));
-        v.extend(h.sessions.iter().map(|s| Row::Live(s.key())));
-        v.extend(old.into_iter().map(|(host, name, agent, key)| Row::Ended {
-            host: host.clone(),
-            name: name.clone(),
-            agent: agent.clone(),
-            key: key.clone(),
-        }));
+/// When it ended, as far as the log goes.
+fn ended_at(d: &Dash, key: &str, name: &str) -> u64 {
+    logged(d, key, name)
+        .iter()
+        .map(|x| x.1)
+        .max()
+        .unwrap_or_default()
+}
+
+fn facts_of(d: &Dash, r: &Row) -> Option<Facts> {
+    match r {
+        Row::Live(k) => d.fleet.find(k).map(|s| timelist::of_live(d, s)),
+        Row::Ended {
+            host,
+            name,
+            agent,
+            key,
+        } => Some(timelist::of_ended(
+            &d.tl.hist,
+            host,
+            agent,
+            ended_at(d, key, name),
+        )),
+        Row::Past(i) => d.tl.hist.get(*i).map(timelist::of_past),
+        _ => None,
     }
-    if d.tl.hide_ended {
-        return v;
-    }
-    // the conversations before: the ones not running now, by project (the
-    // project worked on last first)
+}
+
+/// Every session and conversation there is, before any narrowing.
+fn everything(d: &Dash, gone: &[(String, String, String, String)]) -> Vec<Row> {
+    let mut v: Vec<Row> = Vec::new();
+    v.extend(
+        d.fleet
+            .hosts
+            .iter()
+            .flat_map(|h| h.sessions.iter().map(|s| Row::Live(s.key()))),
+    );
+    v.extend(gone.iter().map(|(host, name, agent, key)| Row::Ended {
+        host: host.clone(),
+        name: name.clone(),
+        agent: agent.clone(),
+        key: key.clone(),
+    }));
+    v.extend(past(d).into_iter().map(Row::Past));
+    v
+}
+
+/// The earlier conversations that aren't running now, newest first.
+fn past(d: &Dash) -> Vec<usize> {
     let live: std::collections::HashSet<(&str, &str, &str)> = d
         .fleet
         .sessions()
         .iter()
         .filter_map(|s| Some((s.host.as_str(), s.agent.as_str(), s.native_id.as_deref()?)))
         .collect();
-    let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
-    let past = d
-        .tl
-        .hist
+    d.tl.hist
         .iter()
         .enumerate()
         .filter(|(_, b)| !live.contains(&(b.host.as_str(), b.agent.as_str(), b.session.as_str())))
-        .take(EARLIER);
-    for (i, b) in past {
+        .take(EARLIER)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// By project, agent or account: a heading each, the busiest kinds of row first
+/// (what's running, then what ended, then the earlier conversations).
+fn grouped(d: &Dash, by: By, all: Vec<Row>) -> Vec<Row> {
+    let mut groups: Vec<(String, Vec<Row>)> = Vec::new();
+    for r in all {
+        let Some(f) = facts_of(d, &r) else { continue };
+        if !timelist::keeps(d, &f) {
+            continue;
+        }
+        let k = f.key(by).to_string();
+        match groups.iter_mut().find(|g| g.0 == k) {
+            Some(g) => g.1.push(r),
+            None => groups.push((k, vec![r])),
+        }
+    }
+    let mut v = Vec::new();
+    for (k, rows) in groups {
+        v.push(Row::Group(timelist::label(by, &k), rows.len()));
+        v.extend(rows);
+    }
+    v
+}
+
+fn rows(d: &Dash, from: u64) -> Vec<Row> {
+    let gone = if d.tl.hide_ended {
+        Vec::new()
+    } else {
+        ended(d, from)
+    };
+    let by = By::of(&d.cfg);
+    if by != By::Machine {
+        let all = if d.tl.hide_ended {
+            everything(d, &[])
+                .into_iter()
+                .filter(|r| matches!(r, Row::Live(_)))
+                .collect()
+        } else {
+            everything(d, &gone)
+        };
+        return grouped(d, by, all);
+    }
+    let keeps = |r: &Row| facts_of(d, r).is_some_and(|f| timelist::keeps(d, &f));
+    let mut v = Vec::new();
+    for h in &d.fleet.hosts {
+        let live: Vec<Row> = h
+            .sessions
+            .iter()
+            .map(|s| Row::Live(s.key()))
+            .filter(&keeps)
+            .collect();
+        let old: Vec<Row> = gone
+            .iter()
+            .filter(|x| x.0 == h.alias)
+            .map(|(host, name, agent, key)| Row::Ended {
+                host: host.clone(),
+                name: name.clone(),
+                agent: agent.clone(),
+                key: key.clone(),
+            })
+            .filter(&keeps)
+            .collect();
+        if live.is_empty() && old.is_empty() {
+            continue;
+        }
+        v.push(Row::Host(h.alias.clone()));
+        v.extend(live);
+        v.extend(old);
+    }
+    if d.tl.hide_ended {
+        return v;
+    }
+    // the conversations before: the ones not running now, by project (the
+    // project worked on last first)
+    let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
+    let earlier = past(d)
+        .into_iter()
+        .filter(|i| keeps(&Row::Past(*i)))
+        .filter_map(|i| d.tl.hist.get(i).map(|b| (i, b)));
+    for (i, b) in earlier {
         match groups.iter_mut().find(|g| g.0 == b.project) {
             Some(g) => g.1.push(i),
             None => groups.push((&b.project, vec![i])),
@@ -479,7 +586,12 @@ fn rows(d: &Dash, from: u64) -> Vec<Row> {
 fn picks(v: &[Row]) -> Vec<usize> {
     v.iter()
         .enumerate()
-        .filter(|(_, r)| !matches!(r, Row::Host(_) | Row::Head(_) | Row::Project(_)))
+        .filter(|(_, r)| {
+            !matches!(
+                r,
+                Row::Host(_) | Row::Group(..) | Row::Head(_) | Row::Project(_)
+            )
+        })
         .map(|(i, _)| i)
         .collect()
 }
@@ -560,6 +672,11 @@ pub(crate) fn monitor_key(d: &mut Dash, k: KeyEvent) -> bool {
         KeyCode::Up | KeyCode::Char('k') => d.tl.sel = d.tl.sel.saturating_sub(1),
         KeyCode::Home => d.tl.sel = 0,
         KeyCode::End => d.tl.sel = n.saturating_sub(1),
+        KeyCode::Char('O') => timelist::cycle_group(d),
+        KeyCode::Char('M') => timelist::toggle_mine(d),
+        KeyCode::Char('C') => timelist::toggle_panel(d),
+        KeyCode::Char('F' | '/') => open_filter(d),
+        KeyCode::Char('x') => return timelist::clear(d),
         KeyCode::Char('e') => {
             d.tl.hide_ended = !d.tl.hide_ended;
             d.note(if d.tl.hide_ended {
@@ -604,6 +721,17 @@ pub(crate) fn monitor_key(d: &mut Dash, k: KeyEvent) -> bool {
         _ => return false,
     }
     true
+}
+
+/// `F`: narrow the list.
+pub(crate) fn open_filter(d: &mut Dash) {
+    let (from, _) = window(d);
+    let gone = ended(d, from);
+    let rows: Vec<Facts> = everything(d, &gone)
+        .iter()
+        .filter_map(|r| facts_of(d, r))
+        .collect();
+    timelist::open_picker(d, rows);
 }
 
 /// The selected row's conversation.
@@ -655,6 +783,10 @@ pub(crate) fn monitor_hints(_d: &Dash) -> Vec<(&'static str, &'static str)> {
         ("t G", "turn view"),
         ("z Z", "fold · expand all"),
         ("+ -", "hours"),
+        ("O", "organise"),
+        ("M", "this machine"),
+        ("F /", "filter"),
+        ("C", "conversation"),
         ("e", "ended"),
         ("←→", "view"),
         ("f o c m g p n s t u", "jump"),
@@ -675,7 +807,7 @@ pub(crate) fn draw_monitor(d: &mut Dash, f: &mut Frame, r: Rect) {
         .get(d.tl.sel)
         .and_then(|i| v.get(*i))
         .and_then(|row| conversation(d, row));
-    d.tl.beside = r.width >= 140;
+    d.tl.beside = r.width >= 140 && d.cfg.get_or("timeline.conversation") != "off";
     let (r, side) = if d.tl.beside {
         let lw = r.width - (r.width * 2 / 5).clamp(60, 90);
         (
@@ -695,7 +827,8 @@ pub(crate) fn draw_monitor(d: &mut Dash, f: &mut Frame, r: Rect) {
     if r.width == 0 {
         return;
     }
-    let live_n = d.fleet.sessions().len();
+    let by = By::of(&d.cfg);
+    let live_n = v.iter().filter(|r| matches!(r, Row::Live(_))).count();
     let mut title = vec![
         Span::raw(" Timeline "),
         Span::styled(format!("· last {}h ", hours(&d.cfg)), ui::faint()),
@@ -713,17 +846,35 @@ pub(crate) fn draw_monitor(d: &mut Dash, f: &mut Frame, r: Rect) {
         return;
     }
     let w = inner.width as usize;
+    // what it lists and how, always on top
+    timelist::chip_bar(d, f, Rect { height: 1, ..inner });
+    let inner = Rect {
+        y: inner.y + 1,
+        height: inner.height - 1,
+        ..inner
+    };
     if v.is_empty() {
-        let lines = vec![
-            Line::from(Span::styled(
-                format!("No sessions in the last {}h.", hours(&d.cfg)),
-                ui::bold(),
-            )),
-            Line::from(Span::styled(
-                "Each session's working, waiting, done and idle stretches show up here as they happen.",
-                ui::muted(),
-            )),
-        ];
+        let narrowed = !d.tl.narrow.is_empty() || d.cfg.flag("timeline.mine");
+        let lines = if narrowed {
+            vec![
+                Line::from(Span::styled("Nothing matches.", ui::bold())),
+                Line::from(Span::styled(
+                    "x clears the filter · M lists every machine.",
+                    ui::muted(),
+                )),
+            ]
+        } else {
+            vec![
+                Line::from(Span::styled(
+                    format!("No sessions in the last {}h.", hours(&d.cfg)),
+                    ui::bold(),
+                )),
+                Line::from(Span::styled(
+                    "Each session's working, waiting, done and idle stretches show up here as they happen.",
+                    ui::muted(),
+                )),
+            ]
+        };
         f.render_widget(Paragraph::new(lines), inner);
         return;
     }
@@ -734,7 +885,28 @@ pub(crate) fn draw_monitor(d: &mut Dash, f: &mut Frame, r: Rect) {
         _ => None,
     });
     let nw = names.max().unwrap_or(8).clamp(8, 22);
-    let lead = 2 + 2 + 2 + nw + 2;
+    // not grouped by machine: each row says which
+    let hw = if by == By::Machine {
+        0
+    } else {
+        d.fleet
+            .hosts
+            .iter()
+            .map(|h| ui::width(&crate::showcase::shown(&h.alias)))
+            .max()
+            .unwrap_or(0)
+            .min(12)
+            + 1
+    };
+    let on_host = |host: &str| -> Span<'static> {
+        if hw == 0 {
+            return Span::raw("");
+        }
+        let col = d.fleet.host(host).map_or(c::MUTED(), |x| x.color);
+        let shown = crate::showcase::shown(host);
+        Span::styled(ui::pad(&ui::trunc(&shown, hw - 1), hw), ui::fg(col))
+    };
+    let lead = 2 + 2 + 2 + hw + nw + 2;
     let right = if w >= lead + 40 + 22 { 20 } else { 0 };
     let bw = w.saturating_sub(lead + right + usize::from(right > 0) * 2);
     // the legend and the axis, pinned
@@ -769,6 +941,17 @@ pub(crate) fn draw_monitor(d: &mut Dash, f: &mut Frame, r: Rect) {
                 Line::from(vec![
                     Span::styled("● ", ui::fg(col)),
                     Span::styled(label, ui::fg(col).add_modifier(Modifier::BOLD)),
+                    Span::raw(" "),
+                    Span::styled("─".repeat(fill), ui::fg(c::LINE())),
+                ])
+            }
+            Row::Group(t, n) => {
+                let count = format!(" {n}");
+                let fill = w.saturating_sub(ui::width(t) + ui::width(&count) + 4);
+                Line::from(vec![
+                    Span::styled("▪ ", ui::fg(c::ACCENT())),
+                    Span::styled(t.clone(), ui::bold()),
+                    Span::styled(count, ui::faint()),
                     Span::raw(" "),
                     Span::styled("─".repeat(fill), ui::fg(c::LINE())),
                 ])
@@ -812,6 +995,7 @@ pub(crate) fn draw_monitor(d: &mut Dash, f: &mut Frame, r: Rect) {
                     Span::styled(format!("{g} "), ui::fg(col)),
                     crate::icons::agent(&s.agent),
                     Span::raw(" "),
+                    on_host(&s.host),
                     Span::styled(
                         ui::pad(&ui::trunc(s.display(), nw), nw),
                         Style::new().fg(s.color()).add_modifier(Modifier::BOLD),
@@ -826,7 +1010,10 @@ pub(crate) fn draw_monitor(d: &mut Dash, f: &mut Frame, r: Rect) {
                 Line::from(l)
             }
             Row::Ended {
-                name, agent, key, ..
+                host,
+                name,
+                agent,
+                key,
             } => {
                 let st = statelog::tidy(logged(d, key, name));
                 let mut l = vec![
@@ -834,6 +1021,7 @@ pub(crate) fn draw_monitor(d: &mut Dash, f: &mut Frame, r: Rect) {
                     Span::styled("○ ", ui::faint()),
                     crate::icons::agent(agent),
                     Span::raw(" "),
+                    on_host(host),
                     Span::styled(ui::pad(&ui::trunc(name, nw), nw), ui::faint()),
                     Span::raw("  "),
                 ];

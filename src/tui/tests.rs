@@ -6615,6 +6615,111 @@ fn focus_side_panel_draws_the_conversation() {
 }
 
 #[test]
+fn monitor_timeline_this_machine_groups_filter_and_no_conversation() {
+    let mut d = dash_own();
+    d.view = View::Monitor;
+    d.mon.sub = monitor_draw::Sub::Timeline;
+    let brief = |host: &str, agent: &str, session: &str, project: &str, acct: &str| {
+        crate::timeline::Brief {
+            host: host.into(),
+            agent: agent.into(),
+            session: session.into(),
+            project: project.into(),
+            acct: acct.into(),
+            last: crate::cache::now() - 7_200,
+            cost: 1.0,
+            requests: 2,
+            ..Default::default()
+        }
+    };
+    d.tl.set_earlier(vec![
+        brief("b31", "claude", "s1", "aleph", "acc1"),
+        brief("gpu2", "codex", "s2", "train", "acc2"),
+    ]);
+    let key = |d: &mut Dash, c: char| {
+        d.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    };
+    let s = render(&mut d, 200, 50);
+    assert!(s.contains("by machine ▾"), "{s}");
+    assert!(s.contains("all machines"), "{s}");
+    assert!(s.contains("conversation on"), "{s}");
+    assert!(s.contains("Conversation"), "the panel: {s}");
+    assert!(s.contains("▪ aleph") && s.contains("▪ train"), "{s}");
+
+    // O: by project; a heading each, and each row says its machine
+    key(&mut d, 'O');
+    assert_eq!(d.cfg.get_or("timeline.group"), "project");
+    let s = render(&mut d, 200, 50);
+    assert!(s.contains("by project ▾"), "{s}");
+    assert!(s.contains("▪ aleph 1") && s.contains("▪ train 1"), "{s}");
+    // and round: agent, account, machine
+    key(&mut d, 'O');
+    let s = render(&mut d, 200, 50);
+    assert!(s.contains("by agent ▾") && s.contains("▪ Codex"), "{s}");
+    key(&mut d, 'O');
+    let s = render(&mut d, 200, 50);
+    assert!(s.contains("by account ▾"), "{s}");
+    key(&mut d, 'O');
+    assert_eq!(d.cfg.get_or("timeline.group"), "machine");
+
+    // M: only the machine on the strip, saved
+    let here = d.fleet.hosts[d.mon.sel].alias.clone();
+    key(&mut d, 'M');
+    assert!(d.cfg.flag("timeline.mine"));
+    let s = render(&mut d, 200, 50);
+    assert!(s.contains(&format!("{here} only")), "{s}");
+    assert!(s.contains("▪ aleph"), "{s}");
+    assert!(!s.contains("▪ train"), "the other machine's: {s}");
+    // another machine: the list follows it
+    d.mon.sel = d
+        .fleet
+        .hosts
+        .iter()
+        .position(|h| h.alias == "gpu2")
+        .unwrap_or(0);
+    let s = render(&mut d, 200, 50);
+    assert!(s.contains("▪ train") && !s.contains("▪ aleph"), "{s}");
+    key(&mut d, 'M');
+    assert!(!d.cfg.flag("timeline.mine"));
+
+    // F: the picker has what's there, and narrows; x clears
+    key(&mut d, 'F');
+    let Mode::TimelinePick(p) = &d.mode else {
+        panic!("the picker");
+    };
+    assert!(p.items.iter().any(|i| i.kind == 'p' && i.id == "train"));
+    assert!(p.items.iter().any(|i| i.kind == 'c' && i.id == "acc1"));
+    let s = render(&mut d, 200, 50);
+    assert!(s.contains("Narrow the timeline"), "{s}");
+    for c in "train".chars() {
+        key(&mut d, c);
+    }
+    d.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(d.mode, Mode::Normal));
+    assert_eq!(d.tl.narrow.projects, vec!["train".to_string()]);
+    let s = render(&mut d, 200, 50);
+    assert!(s.contains("▪ train") && !s.contains("▪ aleph"), "{s}");
+    assert!(s.contains("train ×"), "the chip: {s}");
+    key(&mut d, 'x');
+    assert!(d.tl.narrow.is_empty());
+
+    // nothing matches: says what to do
+    d.tl.narrow.agents = vec!["nothing-like-it".into()];
+    let s = render(&mut d, 200, 50);
+    assert!(s.contains("Nothing matches"), "{s}");
+    d.tl.narrow.clear();
+
+    // C: the conversation panel goes, and its room goes to the list; saved
+    key(&mut d, 'C');
+    assert_eq!(d.cfg.get_or("timeline.conversation"), "off");
+    let s = render(&mut d, 200, 50);
+    assert!(s.contains("conversation off"), "{s}");
+    assert!(!s.contains("Pick a conversation"), "{s}");
+    key(&mut d, 'C');
+    assert_eq!(d.cfg.get_or("timeline.conversation"), "on");
+}
+
+#[test]
 fn monitor_timeline_lists_earlier_conversations_and_shows_their_tree() {
     let mut d = dash();
     d.view = View::Monitor;

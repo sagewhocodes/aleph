@@ -101,6 +101,8 @@ pub(crate) enum Dim {
     Agents,
     Machines,
     Projects,
+    /// Monitor › Timeline's picker (`timelist`): all of them on one list
+    Timeline,
 }
 
 /// A chip's click: open its picker, or drop it (its ×).
@@ -220,6 +222,7 @@ pub(crate) fn click(d: &mut Dash, c: UChip) {
                 }
                 Dim::Machines => d.usage.f.hosts.clear(),
                 Dim::Projects => d.usage.f.projects.clear(),
+                Dim::Timeline => {}
             }
             changed(d);
         }
@@ -309,6 +312,7 @@ fn items_of(dim: Dim, opts: &[Opt]) -> Vec<Item> {
             .filter(|o| o.kind == 'p')
             .map(|o| it(o, 0))
             .collect(),
+        Dim::Timeline => Vec::new(),
     }
 }
 
@@ -398,6 +402,7 @@ impl Picker {
             Dim::Agents => " Agents and their accounts ",
             Dim::Machines => " Machines ",
             Dim::Projects => " Projects ",
+            Dim::Timeline => " Narrow the timeline ",
         };
         let block = ui::panel(title, true);
         let inner = block.inner(r);
@@ -505,7 +510,7 @@ pub(crate) fn apply(d: &mut Dash, p: Picker) {
         }
         Dim::Machines => d.usage.f.hosts = pick('h'),
         Dim::Projects => d.usage.f.projects = pick('p'),
-        Dim::Period => {}
+        Dim::Period | Dim::Timeline => {}
     }
     changed(d);
 }

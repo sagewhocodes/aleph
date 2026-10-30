@@ -24,6 +24,8 @@ keeps errors and costly turns open; `open` folds only repeats; `folded` folds ev
 - `G` in Fleet puts the selected session's timeline in the right panel.
 - Focus shows it at the side.
 - Monitor › Timeline lists earlier conversations by project, with the selected one's tree beside it.
+  `M` lists one machine, `C` hides the tree, `O` groups by machine, project, agent or account, and `F` narrows it to
+  any of those.
 
 The wheel scrolls it, a click folds a row. `[` `]` jump between prompts, `e` to the next error, `f`
 follows the end, `w` shows the words.

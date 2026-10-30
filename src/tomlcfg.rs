@@ -74,6 +74,9 @@ pub const PATHS: &[(&str, &str)] = &[
     ("timeline.keep", "timeline.keep"),
     ("timeline.fold", "timeline.fold"),
     ("timeline.words", "timeline.words"),
+    ("timeline.mine", "timeline.mine"),
+    ("timeline.conversation", "timeline.conversation"),
+    ("timeline.group", "timeline.group"),
     ("analytics.claude_roots", "analytics.claude_roots"),
     ("analytics.codex_homes", "analytics.codex_homes"),
     // the session journal (aleph journal)

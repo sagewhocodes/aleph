@@ -2,6 +2,15 @@
 
 ## 2.1.0 — in progress
 
+### Monitor's Timeline, your way
+- **`M` lists only the machine on the strip,** and follows it when you move to another. `C` hides the conversation panel so
+  the list has the width (`G` still opens the turn view). Both are saved.
+- **`O` organises the list by machine, project, agent or account,** with a heading and count for each, and each row saying
+  which machine it's on. `timeline.group` keeps your choice.
+- **`F` or `/` narrows it the way Usage does:** any machines, agents, accounts and projects, from one searchable list with
+  what each has cost. A chip shows each one; click to drop it, or `x` clears them all.
+- A bar on top says what's on, and every part of it is a click.
+
 ### Resource graphs
 - **Twelve hours of history, by default, for every machine.** The daemon keeps sampling with nothing open, so a graph has
   the hours before you looked. `stats_keep_hours` sets how much, and Settings › Machines has a row per machine to give each
