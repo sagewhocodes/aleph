@@ -661,6 +661,10 @@ pub(crate) fn lines(d: &Dash) -> Vec<Line<'static>> {
             "type into the pane — ctrl+q (or a click outside) stops, ctrl+q again goes to Fleet; ctrl+b works while typing",
         ),
         (
+            "drag",
+            "select across a pane, copied when you let go (focus.copy_on_select); option+drag goes to the agent",
+        ),
+        (
             "n · S · a",
             "new session here · new shell · add an existing session",
         ),

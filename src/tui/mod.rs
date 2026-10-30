@@ -1389,14 +1389,22 @@ impl Dash {
         // Cmd + a key is never a command here, and never a letter for the agent
         // (a terminal that passes Cmd+C on would type a c, or start a window)
         if k.modifiers.contains(KeyModifiers::SUPER) {
-            if matches!(k.code, KeyCode::Char('c') | KeyCode::Char('C')) {
+            if matches!(k.code, KeyCode::Char('c') | KeyCode::Char('C'))
+                && !(self.view == View::Wall && wall::copy_selection(self))
+            {
                 self.toast(
                     Level::Info,
-                    "to copy: hold shift or option as you drag, then Cmd+C",
+                    if self.view == View::Wall {
+                        "to copy: drag across the pane, it's copied when you let go"
+                    } else {
+                        "to copy: hold shift or option as you drag, then Cmd+C"
+                    },
                 );
             }
             return None;
         }
+        // any other key: the selection is over
+        wall::clear_selection(self);
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         // (typing into an agent, ctrl+c is the agent's: it interrupts it)
         let typing =
@@ -3397,12 +3405,23 @@ pub(crate) fn copy_failed() -> &'static str {
     crate::showcase::clip_refused().unwrap_or("couldn't reach a clipboard")
 }
 
+#[cfg(test)]
+thread_local! {
+    /// A test that wants it: what would have reached the clipboard.
+    pub(crate) static COPIED: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
 fn copy_as(text: &str, screen: bool) -> bool {
     // showcase: the masked text, the real one, or nothing (`showcase.clipboard`)
     let Some(text) = crate::showcase::clip(text, screen) else {
         return false;
     };
     let text = text.as_ref();
+    #[cfg(test)]
+    if COPIED.with(|c| c.borrow().is_some()) {
+        COPIED.with(|c| *c.borrow_mut() = Some(text.to_string()));
+        return true;
+    }
     let b = b64_encode(text.as_bytes());
     let mut ok = false;
     if let Ok(mut t) = crate::term::open_tty() {

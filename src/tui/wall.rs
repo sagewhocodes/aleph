@@ -23,7 +23,9 @@
 //! a click outside gives the keys back too.
 //! The wheel scrolls the pane under it (herdr's history, or the agent's own
 //! scrolling when it asked for the mouse); clicks go to an agent that takes
-//! them.
+//! them. A drag across any pane selects what it shows and copies it on release
+//! (`focus.copy_on_select`), the screen held still meanwhile; option+drag goes
+//! to the agent.
 //!
 //! In a session pane, `i` (or enter) opens the message bar at its bottom:
 //! enter sends now, tab queues it for after the current reply (the hub sends
@@ -340,6 +342,18 @@ pub struct Window {
     layout: usize,
 }
 
+/// A drag across a pane's screen: the text to copy.
+pub(crate) struct Selection {
+    pane: u32,
+    /// the screen it's on, and the two ends (terminal cells, inside it)
+    area: Rect,
+    anchor: (u16, u16),
+    cursor: (u16, u16),
+    moved: bool,
+    /// let go and copied: when the highlight goes
+    fades: Option<Instant>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Content {
     Empty,
@@ -371,6 +385,7 @@ pub(crate) struct State {
     pub windows: Vec<Window>,
     pub cur: usize,
     panes: HashMap<u32, Pane>,
+    pub(crate) selection: Option<Selection>,
     next: u32,
     /// keys go to the focused pane
     pub typing: bool,
@@ -433,6 +448,7 @@ impl State {
             windows: vec![],
             cur: 0,
             panes: HashMap::new(),
+            selection: None,
             next: 1,
             typing: false,
             esc_held: None,
@@ -2346,6 +2362,185 @@ fn drop_tile(d: &mut Dash, id: u32) {
     d.wall.dirty = true;
 }
 
+/// A tile showing this output, and its screen (render tests).
+#[cfg(test)]
+pub(crate) fn fix_screen(d: &mut Dash, key: &str, output: &[u8]) -> Rect {
+    let (id, r) = d
+        .wall
+        .rects
+        .iter()
+        .copied()
+        .find(|(id, _)| {
+            matches!(d.wall.panes.get(id).map(|p| &p.content),
+                Some(Content::Session(k)) if k == key)
+        })
+        .expect("no such tile");
+    let inner = inner_of(r);
+    if let Some(p) = d.wall.panes.get_mut(&id) {
+        p.stream = Some(Stream::fixed(key, inner.width, inner.height, output));
+    }
+    inner
+}
+
+/// The stream of the pane a selection is on.
+fn selected_stream(d: &Dash) -> Option<&Stream> {
+    let s = d.wall.selection.as_ref()?;
+    d.wall.panes.get(&s.pane)?.stream.as_ref()
+}
+
+/// No selection any more, and its pane live again.
+pub(crate) fn clear_selection(d: &mut Dash) {
+    if let Some(st) = selected_stream(d) {
+        st.release();
+    }
+    d.wall.selection = None;
+}
+
+/// A press: where a selection would start, on a screen with something on it.
+fn select_down(d: &mut Dash, m: &MouseEvent) {
+    clear_selection(d);
+    if m.modifiers.contains(KeyModifiers::ALT) {
+        return;
+    }
+    let inside = |r: &Rect| {
+        m.column >= r.x && m.column < r.x + r.width && m.row >= r.y && m.row < r.y + r.height
+    };
+    let Some((pane, area)) = d
+        .wall
+        .rects
+        .iter()
+        .map(|(id, r)| (*id, inner_of(*r)))
+        .find(|(_, r)| inside(r))
+    else {
+        return;
+    };
+    if d.wall.panes.get(&pane).is_some_and(|p| p.stream.is_some()) {
+        d.wall.selection = Some(Selection {
+            pane,
+            area,
+            anchor: (m.column, m.row),
+            cursor: (m.column, m.row),
+            moved: false,
+            fades: None,
+        });
+    }
+}
+
+/// A drag: the selection grows, kept inside its pane; false when there's none.
+fn select_drag(d: &mut Dash, m: &MouseEvent) -> bool {
+    if d.wall.drag.is_some() {
+        return false;
+    }
+    let Some(s) = d.wall.selection.as_mut() else {
+        return false;
+    };
+    let cursor = (
+        m.column
+            .clamp(s.area.x, s.area.x + s.area.width.saturating_sub(1)),
+        m.row
+            .clamp(s.area.y, s.area.y + s.area.height.saturating_sub(1)),
+    );
+    if !s.moved && cursor == s.anchor {
+        return true;
+    }
+    s.cursor = cursor;
+    let first = !std::mem::replace(&mut s.moved, true);
+    if first {
+        if let Some(st) = selected_stream(d) {
+            st.hold();
+        }
+    }
+    d.wall.dirty = true;
+    true
+}
+
+/// The release: a drag's text is copied (`focus.copy_on_select`). False when it
+/// was a click.
+fn select_up(d: &mut Dash) -> bool {
+    let moved = d.wall.selection.as_ref().is_some_and(|s| s.moved);
+    if !moved {
+        d.wall.selection = None;
+        return false;
+    }
+    d.wall.swallow_up = false;
+    if d.cfg.flag("focus.copy_on_select") {
+        copy_selection(d);
+        if let Some(s) = d.wall.selection.as_mut() {
+            s.fades = Some(Instant::now() + Duration::from_millis(700));
+        }
+    }
+    true
+}
+
+/// The selection to the clipboard, and a word on how much; false when there's
+/// nothing selected.
+pub(crate) fn copy_selection(d: &mut Dash) -> bool {
+    let (Some(s), Some(st)) = (d.wall.selection.as_ref(), selected_stream(d)) else {
+        return false;
+    };
+    if !s.moved {
+        return false;
+    }
+    let text = st.text_between(s.area, s.anchor, s.cursor);
+    if text.trim().is_empty() {
+        return false;
+    }
+    if super::copy_screen(&text) {
+        let lines = text.lines().count();
+        d.toast(
+            Level::Ok,
+            if lines > 1 {
+                format!("copied {lines} lines")
+            } else {
+                format!("copied {} characters", text.chars().count())
+            },
+        );
+    } else {
+        d.toast(Level::Warn, super::copy_failed());
+    }
+    true
+}
+
+/// The selection's cells lit, on top of the panes; its time up, it goes.
+fn draw_selection(d: &mut Dash, f: &mut Frame) {
+    if let Some(at) = d.wall.selection.as_ref().and_then(|s| s.fades) {
+        if Instant::now() >= at {
+            clear_selection(d);
+        }
+    }
+    // the tile it's on moved or went: so does the selection
+    let gone = d.wall.selection.as_ref().is_some_and(|s| {
+        !d.wall
+            .rects
+            .iter()
+            .any(|(id, r)| *id == s.pane && inner_of(*r) == s.area)
+    });
+    if gone {
+        clear_selection(d);
+    }
+    let Some(s) = d.wall.selection.as_ref().filter(|s| s.moved) else {
+        return;
+    };
+    let (a, b) = (s.anchor, s.cursor);
+    let ((c1, r1), (c2, r2)) = if (a.1, a.0) <= (b.1, b.0) {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let (left, right) = (s.area.x, s.area.x + s.area.width.saturating_sub(1));
+    let style = Style::new().fg(c::TEXT()).bg(c::SEL());
+    let buf = f.buffer_mut();
+    for row in r1..=r2 {
+        let from = if row == r1 { c1 } else { left };
+        let to = if row == r2 { c2 } else { right };
+        for col in from..=to {
+            if let Some(cell) = buf.cell_mut((col, row)) {
+                cell.set_style(style);
+            }
+        }
+    }
+}
+
 pub(crate) fn mouse(d: &mut Dash, m: MouseEvent) {
     let at = |r: &Rect| {
         m.column >= r.x && m.column < r.x + r.width && m.row >= r.y && m.row < r.y + r.height
@@ -2365,7 +2560,16 @@ pub(crate) fn mouse(d: &mut Dash, m: MouseEvent) {
             st.mouse(r, action, m.column, m.row);
         }
     };
+    // a press on a pane's screen may start a selection. Whether it did shows when
+    // it moves, so a click waits for its release to reach the agent; option goes
+    // straight through, for an agent's own dragging
+    let clicked = d.wall.selection.as_ref().is_some_and(|s| !s.moved);
+    if m.kind == MouseEventKind::Down(MouseButton::Left) {
+        select_down(d, &m);
+    }
     match m.kind {
+        MouseEventKind::Drag(MouseButton::Left) if select_drag(d, &m) => {}
+        MouseEventKind::Up(MouseButton::Left) if select_up(d) => {}
         // the end of the click that moved focus here: never the agent's
         MouseEventKind::Drag(MouseButton::Left) if d.wall.swallow_up => {}
         MouseEventKind::Up(_) if d.wall.swallow_up => {
@@ -2382,11 +2586,18 @@ pub(crate) fn mouse(d: &mut Dash, m: MouseEvent) {
                 }
             }
         }
-        MouseEventKind::Down(MouseButton::Left) if typing_in.is_some() => to_agent(d, "down"),
+        MouseEventKind::Down(MouseButton::Left) if typing_in.is_some() => {
+            if d.wall.selection.is_none() {
+                to_agent(d, "down")
+            }
+        }
         MouseEventKind::Drag(MouseButton::Left) if typing_in.is_some() && d.wall.drag.is_none() => {
             to_agent(d, "drag")
         }
         MouseEventKind::Up(MouseButton::Left) if typing_in.is_some() && d.wall.drag.is_none() => {
+            if clicked {
+                to_agent(d, "down");
+            }
             to_agent(d, "up")
         }
         MouseEventKind::Down(MouseButton::Left) => {
@@ -2406,9 +2617,10 @@ pub(crate) fn mouse(d: &mut Dash, m: MouseEvent) {
                 d.wall.cur = *i;
                 return;
             }
-            // grab a divider: the boundary between a split's two halves
+            // grab a divider: the boundary between a split's two halves, from
+            // the borders (on a pane's screen a press is the start of a selection)
             let root = d.wall.win().map(|w| w.root.clone());
-            if let Some(root) = root {
+            if let Some(root) = root.filter(|_| d.wall.selection.is_none()) {
                 for (path, r, dir) in d.wall.dividers.clone() {
                     let ratio = root.ratio_at(&path).unwrap_or(0.5);
                     let hit = match dir {
@@ -2500,6 +2712,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
         return vec![
             (static_key(&keys_back(d)), "Aleph's keys (or click outside)"),
             ("wheel", "scroll back"),
+            ("drag", "copy"),
             ("ctrl+b", "prefix"),
         ];
     }
@@ -2681,6 +2894,7 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
     if let Some((x, y)) = cursor {
         f.set_cursor_position((x, y));
     }
+    draw_selection(d, f);
     if d.wall.queue_view.is_some() {
         draw_queue(d, f, body);
     }
@@ -3261,6 +3475,10 @@ pub(crate) fn cheatsheet(d: &Dash, f: &mut Frame, area: Rect) {
         row(
             "I",
             "keys straight into it, as its own terminal (Focus opens so)",
+        ),
+        row(
+            "drag",
+            "select across a pane, copied when you let go (focus.copy_on_select; option+drag goes to the agent)",
         ),
         row(
             "ctrl+q",

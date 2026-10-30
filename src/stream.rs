@@ -119,6 +119,8 @@ pub struct Stream {
     child: Arc<Mutex<Option<Child>>>,
     stop: Arc<Mutex<bool>>,
     back: Arc<Mutex<Back>>,
+    /// what's on screen, kept still while a selection is dragged across it
+    held: Mutex<Option<vt100::Screen>>,
 }
 
 /// One JSON command on a control stream's stdin; false when there's none
@@ -180,6 +182,30 @@ impl Stream {
             child,
             stop,
             back: Arc::new(Mutex::new(Back::default())),
+            held: Mutex::new(None),
+        }
+    }
+
+    /// A stream with nothing behind it, showing this output (render tests).
+    #[cfg(test)]
+    pub fn fixed(pane: &str, cols: u16, rows: u16, output: &[u8]) -> Stream {
+        let mut p = vt100::Parser::new(rows, cols, 0);
+        p.process(output);
+        Stream {
+            host: String::new(),
+            pane: pane.into(),
+            size: Some((cols, rows)),
+            target: Target {
+                ssh: String::new(),
+                machine: String::new(),
+                source: "",
+            },
+            parser: Arc::new(Mutex::new(p)),
+            state: Arc::new(Mutex::new(State::default())),
+            child: Arc::new(Mutex::new(None)),
+            stop: Arc::new(Mutex::new(true)),
+            back: Arc::new(Mutex::new(Back::default())),
+            held: Mutex::new(None),
         }
     }
 
@@ -198,8 +224,51 @@ impl Stream {
                 return None;
             }
         }
+        if let Some(s) = self.held.lock().unwrap().as_ref() {
+            return paint(s, buf, area);
+        }
         let p = self.parser.lock().unwrap();
         paint(p.screen(), buf, area)
+    }
+
+    /// Keep the screen as it is while a selection is dragged across it.
+    pub fn hold(&self) {
+        let mut h = self.held.lock().unwrap();
+        if h.is_none() {
+            *h = Some(self.parser.lock().unwrap().screen().clone());
+        }
+    }
+
+    /// Live again.
+    pub fn release(&self) {
+        *self.held.lock().unwrap() = None;
+    }
+
+    /// The text from one point of `area` to another, both ends included, as
+    /// `render` drew it: a line the terminal wrapped stays one line, and what
+    /// a tile cuts off a row's end comes along when the selection runs past it.
+    pub fn text_between(&self, area: Rect, a: (u16, u16), b: (u16, u16)) -> String {
+        // by row, then by column
+        let ((c1, r1), (c2, r2)) = if (a.1, a.0) <= (b.1, b.0) {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        let (c1, c2) = (c1.saturating_sub(area.x), c2.saturating_sub(area.x));
+        let (r1, r2) = (r1.saturating_sub(area.y), r2.saturating_sub(area.y));
+        {
+            let back = self.back.lock().unwrap();
+            if let (Some(lines), true) = (&back.lines, back.up > 0) {
+                let end = lines.len().saturating_sub(back.up);
+                let start = end.saturating_sub(area.height as usize);
+                return history_text(&lines[start..end], (r1, c1), (r2, c2));
+            }
+        }
+        let held = self.held.lock().unwrap();
+        let p = self.parser.lock().unwrap();
+        let s = held.as_ref().unwrap_or(p.screen());
+        let top = (content_bottom(s) + 1).saturating_sub(area.height);
+        trim_lines(&s.contents_between(r1 + top, c1, r2 + top, c2 + 1))
     }
 
     /// The agent asked for application cursor keys (as far as its frames say).
@@ -488,6 +557,39 @@ pub fn paint(s: &vt100::Screen, buf: &mut Buffer, area: Rect) -> Option<(u16, u1
     let (cr, cc) = s.cursor_position();
     (!s.hide_cursor() && cr >= top && cr < top + area.height && cc < area.width)
         .then(|| (area.x + cc, area.y + cr - top))
+}
+
+/// Blanks at the ends of lines, and empty rows after the last line, are the
+/// screen's, not the text's.
+fn trim_lines(text: &str) -> String {
+    let v: Vec<&str> = text.lines().map(str::trim_end).collect();
+    v.join("\n").trim_end().to_string()
+}
+
+/// What's selected of rows of history (row, col), both ends included.
+fn history_text(rows: &[Line<'static>], from: (u16, u16), to: (u16, u16)) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for (i, l) in rows.iter().enumerate() {
+        let i = i as u16;
+        if i < from.0 || i > to.0 {
+            continue;
+        }
+        let first = if i == from.0 { from.1 as usize } else { 0 };
+        let last = if i == to.0 {
+            to.1 as usize + 1
+        } else {
+            usize::MAX
+        };
+        let (mut col, mut s) = (0, String::new());
+        for ch in l.spans.iter().flat_map(|sp| sp.content.chars()) {
+            if col >= first && col < last {
+                s.push(ch);
+            }
+            col += crate::ui::width(ch.encode_utf8(&mut [0; 4]));
+        }
+        out.push(s.trim_end().to_string());
+    }
+    out.join("\n").trim_end().to_string()
 }
 
 /// An observed tile scrolled back: the history's rows ending `up` above its
@@ -867,6 +969,58 @@ fn observe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_selection_reads_what_the_tile_shows() {
+        let area = Rect::new(10, 5, 20, 4);
+        // (the screen is as wide as the tile; what's on it starts at its top)
+        let st = Stream::fixed("w:p", 20, 4, b"first line   \r\nsecond line\r\nthird");
+        let at = |c: u16, r: u16| (area.x + c, area.y + r);
+        let top = 0;
+        let one = st.text_between(area, at(6, top), at(9, top));
+        assert_eq!(one, "line");
+        // either way round, and blanks at line ends aren't the text's
+        assert_eq!(
+            st.text_between(area, at(2, top + 1), at(0, top)),
+            "first line\nsec"
+        );
+        assert_eq!(
+            st.text_between(area, at(0, top), at(19, top + 2)),
+            "first line\nsecond line\nthird"
+        );
+        // a line the terminal wrapped is one line; wide characters stay whole
+        let st = Stream::fixed("w:p", 8, 3, "abcdefghij\r\n日本語x".as_bytes());
+        let area = Rect::new(0, 0, 8, 3);
+        assert_eq!(st.text_between(area, (0, 0), (7, 2)), "abcdefghij\n日本語x");
+        // held: the screen stays as it was while the drag goes on
+        st.hold();
+        st.parser
+            .lock()
+            .unwrap()
+            .process(b"\r\nmore\r\nand more\r\n");
+        assert_eq!(st.text_between(area, (0, 0), (7, 0)), "abcdefgh");
+        st.release();
+        assert_ne!(st.text_between(area, (0, 0), (7, 0)), "abcdefgh");
+    }
+
+    #[test]
+    fn a_selection_reads_a_tiles_history() {
+        let area = Rect::new(0, 0, 10, 2);
+        let st = Stream::fixed("w:p", 10, 2, b"live");
+        {
+            let mut b = st.back.lock().unwrap();
+            b.lines = Some(vec![
+                Line::raw("one"),
+                Line::raw("two words  "),
+                Line::raw("three"),
+                Line::raw("four"),
+            ]);
+            b.up = 1;
+        }
+        // two rows ending one above the last: two words, three
+        assert_eq!(st.text_between(area, (4, 0), (2, 1)), "words\nthr");
+        assert_eq!(st.text_between(area, (0, 1), (9, 1)), "three");
+    }
 
     #[test]
     fn keys_are_what_a_terminal_sends() {

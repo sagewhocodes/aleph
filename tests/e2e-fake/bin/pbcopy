@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stands in for the clipboard: what would be copied lands in $ST/clip, so a test
+# can read it and the real clipboard is never touched.
+cat > "${ST:-/tmp}/clip"

@@ -2,6 +2,12 @@
 
 ## 2.1.0 — in progress
 
+### Selecting and copying
+- **Drag across any tile to select its text.** It's copied when you let go, as herdr does, in every tile rather than
+  only the first; a line the terminal wrapped stays one line, and the screen holds still while you drag. Clicks still
+  reach the agent, and option+drag goes to it for an agent's own dragging. `focus.copy_on_select` off keeps the selection
+  until the next key, and Cmd+C copies it where the terminal passes Cmd+C on.
+
 ### Keys that changed
 - **`ctrl+q` is the way out.** While typing into an agent it gives the keys back to Aleph; pressed again it goes to Fleet.
   `ctrl+]` isn't Aleph's any more and reaches the agent. The prefix and then `ctrl+q` sends it to the pane, for a shell

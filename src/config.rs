@@ -188,6 +188,7 @@ pub fn section_of(key: &str) -> &'static str {
         | "focus.keys"
         | "focus.exit"
         | "focus.esc_guard"
+        | "focus.copy_on_select"
         | "close.grace"
         | "wall_fit"
         | "wall_layout"
@@ -433,6 +434,12 @@ pub const KNOWN: &[Known] = &[
         default: "ctrl+q",
         kind: Kind::Text,
         help: "keys out of Focus (and Tile): while typing into the agent, the first gives the keys back to Aleph (esc is the agent's then: it interrupts its work), the next goes to Fleet; the prefix and then this key sends it to the pane; comma-separated: ctrl+q, f12, alt+q, …",
+    },
+    Known {
+        key: "focus.copy_on_select",
+        default: "true",
+        kind: Kind::Bool,
+        help: "Focus / Tile: text you drag across a pane is copied when you let go, as herdr does. Off: it stays selected until the next key or click, and Cmd+C copies it where the terminal passes Cmd+C on. Option+drag goes to the agent instead",
     },
     Known {
         key: "focus.esc_guard",

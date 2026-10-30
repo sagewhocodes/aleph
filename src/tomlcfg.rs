@@ -114,6 +114,7 @@ pub const PATHS: &[(&str, &str)] = &[
     ("focus.keys", "sessions.focus_keys"),
     ("focus.exit", "sessions.focus_exit"),
     ("focus.esc_guard", "sessions.focus_esc_guard"),
+    ("focus.copy_on_select", "sessions.focus_copy_on_select"),
     ("approvals.layout", "automation.approvals_layout"),
     ("approvals.group", "automation.approvals_group"),
     ("close.grace", "sessions.close_grace"),

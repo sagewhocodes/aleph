@@ -4536,6 +4536,95 @@ fn brackets_step_sessions_and_ctrl_brackets_step_machines() {
     assert_eq!(d.mon.sel, 1);
 }
 
+/// A drag across any tile selects there and copies on release. Clicks still
+/// reach the agent, option+drag goes to it, and the keys end a selection.
+#[test]
+fn dragging_across_a_tile_selects_and_copies() {
+    let mut d = dash_own();
+    let _ = render(&mut d, 120, 30);
+    super::COPIED.with(|c| *c.borrow_mut() = Some(String::new()));
+    let copied = || super::COPIED.with(|c| c.borrow().clone().unwrap_or_default());
+    wall::tile(
+        &mut d,
+        vec!["b31|w1:p1".into(), "gpu2|w1:p4".into()],
+        View::Fleet,
+    );
+    let _ = render(&mut d, 120, 30);
+    let left = wall::fix_screen(&mut d, "b31|w1:p1", b"left tile words");
+    let right = wall::fix_screen(&mut d, "gpu2|w1:p4", b"right tile words\r\nsecond row");
+    assert!(right.x > left.x, "side by side");
+    let mouse = |d: &mut Dash, kind, column, row, modifiers| {
+        wall::mouse(
+            d,
+            MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers,
+            },
+        );
+    };
+    let none = KeyModifiers::NONE;
+    let (down, drag, up) = (
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    );
+    let row = right.y;
+    // the right-hand tile, whichever has the keys: "right" and its row's end
+    mouse(&mut d, down, right.x, row, none);
+    mouse(&mut d, drag, right.x + 4, row, none);
+    assert!(copied().is_empty(), "not until you let go");
+    // lit while it's dragged, on that tile only
+    let lit = render_buf(&mut d, 120, 30);
+    let sel = crate::ui::c::SEL();
+    assert_eq!(lit[(right.x + 2, row)].bg, sel, "selected");
+    assert_ne!(lit[(right.x + 6, row)].bg, sel, "past the end");
+    assert_ne!(lit[(left.x + 2, left.y)].bg, sel, "the other tile");
+    mouse(&mut d, up, right.x + 4, row, none);
+    assert_eq!(copied(), "right");
+    assert!(d
+        .current_toast()
+        .is_some_and(|t| t.text.contains("copied 5 characters")));
+    // a key ends it; a drag beyond the tile stays inside it, over both rows
+    d.on_key(k(KeyCode::Char('z')));
+    d.on_key(k(KeyCode::Char('z')));
+    assert!(d.wall.selection.is_none());
+    let _ = render(&mut d, 120, 30);
+    mouse(&mut d, down, right.x, row, none);
+    mouse(&mut d, drag, 119, 29, none);
+    mouse(&mut d, up, 119, 29, none);
+    assert_eq!(copied(), "right tile words\nsecond row");
+    // the left tile just the same (the first report of this bug: only one worked)
+    let row = left.y;
+    mouse(&mut d, down, left.x, row, none);
+    mouse(&mut d, drag, left.x + 3, row, none);
+    mouse(&mut d, up, left.x + 3, row, none);
+    assert_eq!(copied(), "left");
+    // a click isn't a selection, and copies nothing
+    super::COPIED.with(|c| *c.borrow_mut() = Some(String::new()));
+    mouse(&mut d, down, left.x + 1, row, none);
+    assert!(d.wall.selection.as_ref().is_some());
+    mouse(&mut d, up, left.x + 1, row, none);
+    assert!(d.wall.selection.is_none() && copied().is_empty());
+    // option+drag belongs to the agent
+    mouse(&mut d, down, left.x, row, KeyModifiers::ALT);
+    assert!(d.wall.selection.is_none());
+    mouse(&mut d, drag, left.x + 3, row, KeyModifiers::ALT);
+    mouse(&mut d, up, left.x + 3, row, KeyModifiers::ALT);
+    assert!(d.wall.selection.is_none() && copied().is_empty());
+    // copy on select off: it stays selected, and Cmd+C copies it
+    let _ = d.cfg.set("focus.copy_on_select", "false");
+    mouse(&mut d, down, left.x, row, none);
+    mouse(&mut d, drag, left.x + 3, row, none);
+    mouse(&mut d, up, left.x + 3, row, none);
+    assert!(copied().is_empty());
+    assert!(d.wall.selection.is_some());
+    d.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER));
+    assert_eq!(copied(), "left");
+    super::COPIED.with(|c| *c.borrow_mut() = None);
+}
+
 /// ctrl+q: the keys back, then Fleet. ctrl+] is the agent's now, and the prefix
 /// sends ctrl+q itself, for a shell frozen by ctrl+s.
 #[test]

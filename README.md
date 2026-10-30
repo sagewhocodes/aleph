@@ -101,6 +101,7 @@ aleph doctor                         # check everything
 | `ctrl+a` · `ctrl+k` | Approvals · palette |
 | `ctrl+q` | Keys back to Aleph, then back to Fleet |
 | `[ ]` · `ctrl+[ ]` | Previous / next session, on any machine · machine (or `( )`) |
+| Drag | Select across a pane; copied when you let go (option+drag goes to the agent) |
 | `?` | Every key |
 
 ## 💻 From the shell
