@@ -896,32 +896,30 @@ fn outside_line(
     on: bool,
     last: bool,
 ) -> Line<'static> {
-    let _ = d;
-    paint1(
-        vec![
-            Span::styled(if last { "    └ " } else { "    ├ " }, ui::faint()),
-            Span::styled("○ ", ui::muted()),
-            crate::icons::agent(&o.p.agent),
-            Span::raw(" "),
-            Span::styled(
-                ui::pad(
-                    &ui::trunc(&crate::agents::label(&o.p.agent), cw.name),
-                    cw.name + 1,
-                ),
-                ui::muted(),
+    let mut v = vec![
+        Span::styled(if last { "    └ " } else { "    ├ " }, ui::faint()),
+        Span::styled("○ ", ui::muted()),
+        crate::icons::agent(&o.p.agent),
+        Span::raw(" "),
+        Span::styled(
+            ui::pad(
+                &ui::trunc(&crate::agents::label(&o.p.agent), cw.name),
+                cw.name + 1,
             ),
-            Span::styled(ui::pad("outside herdr", cw.state + 1), ui::faint()),
-            Span::styled(
-                format!(
-                    "{}  · enter reopens it there",
-                    ui::trunc(&o.cwd.clone().unwrap_or_default(), 48)
-                ),
-                ui::faint(),
-            ),
-        ],
-        on,
-        w,
-    )
+            ui::muted(),
+        ),
+        Span::styled(ui::pad("outside herdr", cw.state + 1), ui::faint()),
+        Span::styled(
+            format!("{}  ", ui::trunc(&o.cwd.clone().unwrap_or_default(), 48)),
+            ui::faint(),
+        ),
+    ];
+    // its numbers, from its own logs
+    match super::outside::usage_for(d, o) {
+        Some(l) => v.extend(super::usage::chip(l, 34)),
+        None => v.push(Span::styled("· enter reopens it there", ui::faint())),
+    }
+    paint1(v, on, w)
 }
 
 /// A selected line on the selection's colour, with the accent bar.

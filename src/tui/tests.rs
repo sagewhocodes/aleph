@@ -3241,15 +3241,53 @@ fn dash_with_history(extra: &[&str]) -> Dash {
 }
 
 #[test]
+fn a_rows_model_sits_between_its_name_and_its_state() {
+    use crate::usage::dash::{Data, Live};
+    let mut d = dash();
+    d.fleet.host_mut("b31").unwrap().sessions[0].native_id = Some("conv-1".into());
+    let name = d.fleet.host_mut("b31").unwrap().sessions[0]
+        .display()
+        .to_string();
+    let mut data = Data::default();
+    data.live.insert(
+        "conv-1".into(),
+        Live {
+            model: "claude-opus-5-5-20261001".into(),
+            tokens: 5000,
+            ..Default::default()
+        },
+    );
+    d.usage.data = Some(data);
+    let s = render(&mut d, 220, 40);
+    let row = s
+        .lines()
+        .find(|l| l.contains(&name) && l.contains(" tok"))
+        .unwrap_or_default();
+    let (n, m) = (
+        row.find(&name).expect(row),
+        row.find("opus-5-5").expect(row),
+    );
+    assert!(n < m, "{row}");
+    assert!(m < row.find("tok").unwrap_or(usize::MAX), "{row}");
+    // a narrow list leaves it to the preview
+    let s = render(&mut d, 90, 30);
+    assert!(
+        !s.lines()
+            .any(|l| l.contains(&name) && l.contains("opus-5-5")),
+        "{s}"
+    );
+}
+
+#[test]
 fn a_rows_lead_is_as_wide_as_the_axis_assumes() {
     let d = dash();
     for s in d.fleet.sessions() {
-        for guide in ["├─", "└─"] {
-            let w: usize = fleet::lead(&d, s, (12, 18), guide)
+        for (guide, mw) in [("├─", 0), ("└─", 0), ("├─", 14)] {
+            let w: usize = fleet::lead(&d, s, (12, mw, 18), guide)
                 .iter()
                 .map(|x| ui::width(&x.content))
                 .sum();
-            assert_eq!(w, fleet::lead_w((12, 18)), "{}", s.display());
+            assert_eq!(w, fleet::lead_w((12, mw, 18)), "{}", s.display());
         }
     }
 }

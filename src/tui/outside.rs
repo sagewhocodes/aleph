@@ -30,11 +30,16 @@ struct Host {
     /// the pids the folders were asked for
     pids: Vec<String>,
     cwd: HashMap<String, String>,
+    /// pid → the session file it has open (or its folder's newest, for Claude Code)
+    file: HashMap<String, String>,
     at: Option<Instant>,
-    rx: Option<Receiver<HashMap<String, String>>>,
+    rx: Option<Receiver<Looked>>,
     /// the login user there (other users' agents aren't listed)
     user: Option<String>,
 }
+
+/// What one look at a machine's processes found: (pid → folder, pid → session file).
+type Looked = (HashMap<String, String>, HashMap<String, String>);
 
 /// One agent outside herdr.
 #[derive(Clone, Debug, PartialEq)]
@@ -42,6 +47,8 @@ pub(crate) struct Outside {
     pub host: String,
     pub p: AgentProc,
     pub cwd: Option<String>,
+    /// its conversation's id, from the session file it's writing
+    pub conv: Option<String>,
 }
 
 impl Outside {
@@ -162,6 +169,9 @@ pub(crate) fn list(d: &Dash, host: &str) -> Vec<Outside> {
             host: host.to_string(),
             p: p.clone(),
             cwd: hs.and_then(|h| h.cwd.get(&p.pid).cloned()),
+            conv: hs
+                .and_then(|h| h.file.get(&p.pid))
+                .and_then(|f| crate::adopt::id_in_path(&p.agent, f)),
         })
         .collect()
 }
@@ -194,10 +204,11 @@ pub(crate) fn pump(d: &mut Dash) {
         if let Some(rx) = &h.rx {
             if let Ok(m) = rx.try_recv() {
                 // showcase: their folders are masked like herdr sessions'
-                for c in m.values() {
+                for c in m.0.values() {
                     crate::showcase::learn_folder(c);
                 }
-                h.cwd = m;
+                h.cwd = m.0;
+                h.file = m.1;
                 h.rx = None;
             }
         }
@@ -223,7 +234,9 @@ pub(crate) fn pump(d: &mut Dash) {
     }
 }
 
-/// The lookup script: `pid<TAB>folder` per pid (pure — tested).
+/// The lookup script: `pid<TAB>folder<TAB>session file` per pid (pure — tested).
+/// The file is one it has open (Codex keeps its rollout open); else, for Claude
+/// Code, which opens its only to write, its folder's newest.
 pub(crate) fn script(pids: &[String]) -> String {
     let list: Vec<&str> = pids
         .iter()
@@ -233,40 +246,60 @@ pub(crate) fn script(pids: &[String]) -> String {
     format!(
         "LC_ALL=C; for p in {}; do c=$(readlink \"/proc/$p/cwd\" 2>/dev/null); \
          [ -n \"$c\" ] || c=$(lsof -a -d cwd -p \"$p\" -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1); \
-         printf '%s\\t%s\\n' \"$p\" \"$c\"; done\n",
+         f=$(ls -l \"/proc/$p/fd\" 2>/dev/null | sed -n 's/.* -> \\(.*\\.jsonl\\)$/\\1/p' | head -n 1); \
+         [ -n \"$f\" ] || f=$(lsof -p \"$p\" -Fn 2>/dev/null | sed -n 's/^n\\(.*\\.jsonl\\)$/\\1/p' | head -n 1); \
+         if [ -z \"$f\" ]; then d=$(printf %s \"$c\" | sed 's/[^A-Za-z0-9]/-/g'); \
+         f=$(ls -t \"$HOME/.claude/projects/$d\"/*.jsonl 2>/dev/null | head -n 1); fi; \
+         printf '%s\\t%s\\t%s\\n' \"$p\" \"$c\" \"$f\"; done\n",
         list.join(" ")
     )
 }
 
-/// `pid<TAB>folder` lines → a map (pure — tested).
-pub(crate) fn parse(text: &str) -> HashMap<String, String> {
+/// `pid<TAB>…` lines → pid → column `col` (1 the folder, 2 the session file; pure — tested).
+pub(crate) fn parse(text: &str, col: usize) -> HashMap<String, String> {
     text.lines()
         .filter_map(|l| {
-            let (p, c) = l.split_once('\t')?;
-            let c = c.trim();
-            (!c.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-                .then(|| (p.to_string(), c.to_string()))
+            let mut f = l.split('\t');
+            let p = f.next()?;
+            let v = f.nth(col - 1)?.trim();
+            (!v.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| (p.to_string(), v.to_string()))
         })
         .collect()
 }
 
-fn folders(host: &str, pids: &[String]) -> HashMap<String, String> {
+fn folders(host: &str, pids: &[String]) -> Looked {
     let mut cmd = crate::sshcfg::shell(host, "sh -s");
     let input = script(pids);
     match crate::proc::run(&mut cmd, Duration::from_secs(10), Some(input.as_bytes())) {
-        Ok(o) => parse(&o.text()),
-        Err(_) => HashMap::new(),
+        Ok(o) => {
+            let t = o.text();
+            (parse(&t, 1), parse(&t, 2))
+        }
+        Err(_) => Default::default(),
     }
 }
 
-/// Its numbers from its own logs: the latest session of that agent in that
-/// folder, active since the process started.
+/// Its numbers from its own logs: its own conversation when the file it writes
+/// says which, else the latest of that agent in that folder since the process
+/// started, never one a session in herdr is having.
 pub(crate) fn usage_for<'a>(d: &'a Dash, o: &Outside) -> Option<&'a crate::usage::dash::Live> {
-    let cwd = o.cwd.as_deref()?;
     let data = d.usage.data.as_ref()?;
+    if let Some(l) = o.conv.as_ref().and_then(|c| data.live.get(c)) {
+        return Some(l);
+    }
+    let cwd = o.cwd.as_deref()?;
     let started = crate::cache::now().saturating_sub(o.p.age.unwrap_or(0) + 120);
+    let in_herdr: Vec<&str> = d
+        .fleet
+        .sessions()
+        .into_iter()
+        .filter_map(|s| s.native_id.as_deref())
+        .collect();
     data.live
-        .values()
+        .iter()
+        .filter(|(id, _)| !in_herdr.contains(&id.as_str()))
+        .map(|(_, l)| l)
         .filter(|l| l.host == o.host && l.agent == o.p.agent && l.last >= started)
         .filter(|l| same_folder(&l.project, cwd))
         .max_by_key(|l| l.last)
@@ -290,7 +323,7 @@ pub(crate) fn line(
     o: &Outside,
     guide: &str,
     w: usize,
-    (nw, sw): (usize, usize),
+    (nw, mw, sw): (usize, usize, usize),
     selected: bool,
 ) -> Line<'static> {
     let short = |p: &str| -> String {
@@ -300,7 +333,11 @@ pub(crate) fn line(
             .unwrap_or_else(|| p.to_string())
     };
     let label = crate::agents::label(&o.p.agent);
-    let state = "○ outside herdr".to_string();
+    let state = match o.p.age {
+        Some(a) => format!("○ outside · up {}", ui::dur(a)),
+        None => "○ outside herdr".to_string(),
+    };
+    let state = ui::trunc(&state, sw);
     let mut v: Vec<Span> = vec![
         Span::styled(format!("  {guide}  "), ui::fg(c::LINE())),
         Span::raw("  "),
@@ -308,8 +345,18 @@ pub(crate) fn line(
         Span::raw(" "),
         Span::styled(ui::pad(&ui::trunc(&label, nw), nw), ui::muted()),
         Span::raw("  "),
-        Span::styled(ui::pad(&state, sw), ui::faint()),
     ];
+    if mw > 0 {
+        let model = usage_for(d, o)
+            .map(|l| crate::timeline::short_model(&l.model))
+            .unwrap_or_default();
+        v.push(Span::styled(
+            ui::pad(&ui::trunc(&model, mw), mw),
+            ui::muted(),
+        ));
+        v.push(Span::raw("  "));
+    }
+    v.push(Span::styled(ui::pad(&state, sw), ui::faint()));
     let used: usize = v.iter().map(|x| ui::width(&x.content)).sum();
     let room = w.saturating_sub(used + 1);
     if room > 6 {
@@ -419,7 +466,7 @@ mod tests {
         let s = script(&["123".into(), "45; rm -rf /".into(), "77".into()]);
         assert!(s.contains("for p in 123 77;"), "{s}");
         assert!(!s.contains("rm -rf"), "{s}");
-        let m = parse("123\t/home/selene/hunt\n77\t\nx\t/etc\n");
+        let m = parse("123\t/home/selene/hunt\n77\t\nx\t/etc\n", 1);
         assert_eq!(m.len(), 1);
         assert_eq!(m["123"], "/home/selene/hunt");
     }

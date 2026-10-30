@@ -1589,6 +1589,8 @@ fn host_card(d: &Dash, h: &Host, w: usize, selected: bool) -> Vec<Line<'static>>
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Cols {
     pub nw: usize,
+    /// the model's column (0: no room for it)
+    pub mw: usize,
     pub sw: usize,
     pub bars: usize,
     pub tl: usize,
@@ -1600,7 +1602,7 @@ pub(crate) struct Cols {
 pub(crate) fn lead(
     d: &Dash,
     s: &Session,
-    (nw, sw): (usize, usize),
+    (nw, mw, sw): (usize, usize, usize),
     guide: &str,
 ) -> Vec<Span<'static>> {
     let marked = d.fv.marked.contains(&s.key());
@@ -1625,13 +1627,43 @@ pub(crate) fn lead(
         ),
         Span::raw("  "),
     ];
+    if mw > 0 {
+        v.push(Span::styled(
+            ui::pad(&ui::trunc(&model_of(d, s), mw), mw),
+            ui::fg(s.color()),
+        ));
+        v.push(Span::raw("  "));
+    }
     v.extend(super::motion::status(d, s, &st, base, sw));
     v
 }
 
+/// The model a session last used, short (`opus-5-5`), from its own logs: known
+/// after its first request is read.
+fn model_of(d: &Dash, s: &Session) -> String {
+    super::usage::live_for(d, s)
+        .map(|l| crate::timeline::short_model(&l.model))
+        .unwrap_or_default()
+}
+
+/// The model column's width for these sessions (0: none has one yet).
+fn model_w(d: &Dash, sessions: &[&Session]) -> usize {
+    sessions
+        .iter()
+        .map(|s| ui::width(&model_of(d, s)))
+        .max()
+        .unwrap_or(0)
+        .min(MODEL_W)
+}
+
+/// A long model name is cut here.
+const MODEL_W: usize = 16;
+/// Rows narrower than this leave the model to the preview.
+const MODEL_MIN_ROW: usize = 96;
+
 /// How wide `lead` is (the same for every row of a frame).
-pub(crate) fn lead_w((nw, sw): (usize, usize)) -> usize {
-    2 + 2 + 2 + 2 + 1 + 1 + nw + 2 + sw
+pub(crate) fn lead_w((nw, mw, sw): (usize, usize, usize)) -> usize {
+    2 + 2 + 2 + 2 + 1 + 1 + nw + 2 + if mw > 0 { mw + 2 } else { 0 } + sw
 }
 
 fn sess_line(
@@ -1643,7 +1675,7 @@ fn sess_line(
     selected: bool,
     guide: &str,
 ) -> Line<'static> {
-    let mut v = lead(d, s, (cols.nw, cols.sw), guide);
+    let mut v = lead(d, s, (cols.nw, cols.mw, cols.sw), guide);
     // closing (`close.grace`): greyed out, and how long until then
     if let Some(e) = crate::closing::pending(&s.host, &s.pane_id) {
         for sp in v.iter_mut() {
@@ -1827,14 +1859,21 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
     let w = lw_guess.saturating_sub(2 + 2 * ui::padding().left) as usize;
     // the session rows' columns: the tiny bars when there's room, the
     // timeline across what's left (`g`; the bars give way when it's tight)
+    let mw = if w >= MODEL_MIN_ROW {
+        let all = d.fleet.sessions();
+        model_w(d, &all)
+    } else {
+        0
+    };
     let mut cols = Cols {
         nw,
+        mw,
         sw,
         bars: super::rowbars::room(&d.cfg, w),
         tl: 0,
     };
     if super::timechart::fleet_rows(d) {
-        let tl_w = |bars: usize| w.saturating_sub(lead_w((nw, sw)) + bars.max(2) + 1);
+        let tl_w = |bars: usize| w.saturating_sub(lead_w((nw, mw, sw)) + bars.max(2) + 1);
         if tl_w(cols.bars) < 40 {
             cols.bars = 0;
         }
@@ -1903,7 +1942,7 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
             RowId::Outside(k) => {
                 if let Some(o) = super::outside::find(d, k) {
                     let g = super::outside::guide(last_child(i));
-                    lines.push(super::outside::line(d, &o, g, w, (nw, sw), is_sel));
+                    lines.push(super::outside::line(d, &o, g, w, (nw, mw, sw), is_sel));
                     map.push(Some(i));
                 }
             }
@@ -2032,7 +2071,7 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
     f.render_widget(block, list_r);
     // the timeline's hour axis, pinned over the rows
     let inner = if cols.tl > 0 && inner.height > 2 {
-        let x = lead_w((nw, sw)) + cols.bars.max(2);
+        let x = lead_w((nw, mw, sw)) + cols.bars.max(2);
         f.render_widget(
             Paragraph::new(super::timechart::fleet_axis(d, x, cols.tl)),
             Rect { height: 1, ..inner },
