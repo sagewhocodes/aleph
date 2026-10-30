@@ -214,7 +214,7 @@ impl Node {
             _ => None,
         }
     }
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         match self {
             Node::Leaf(id) => json!({ "pane": id }),
             Node::Split { dir, ratio, a, b } => json!({
@@ -340,6 +340,11 @@ pub struct Window {
     pub focus: u32,
     pub zoom: bool,
     layout: usize,
+    /// `L`: nothing splits, closes, swaps or resizes it
+    locked: bool,
+    /// arranged by hand since the last `space`, and what `space` keeps of that
+    handmade: bool,
+    own: Option<Node>,
 }
 
 /// A drag across a pane's screen: the text to copy.
@@ -619,6 +624,9 @@ impl State {
             focus: ids[0],
             zoom: false,
             layout,
+            locked: false,
+            handmade: false,
+            own: None,
         });
         self.cur = self.windows.len() - 1;
         self.dirty = true;
@@ -656,7 +664,7 @@ fn save(st: &State) {
                     (id.to_string(), c)
                 })
                 .collect();
-            json!({"name": w.name, "root": w.root.to_json(), "focus": w.focus, "layout": w.layout, "panes": panes})
+            json!({"name": w.name, "root": w.root.to_json(), "focus": w.focus, "locked": w.locked, "layout": w.layout, "panes": panes})
         })
         .collect();
     let doc = json!({"version": 1, "cur": cur.min(wins.len().saturating_sub(1)), "windows": wins});
@@ -713,6 +721,9 @@ fn load(st: &mut State) -> bool {
             focus,
             zoom: false,
             layout: w.get("layout").and_then(Value::as_u64).unwrap_or(0) as usize,
+            locked: w.get("locked").and_then(Value::as_bool).unwrap_or(false),
+            handmade: false,
+            own: None,
         });
     }
     st.cur = (v.get("cur").and_then(Value::as_u64).unwrap_or(0) as usize)
@@ -821,6 +832,18 @@ pub(crate) fn focus_on(d: &mut Dash, key: &str, from: View) {
 pub(crate) fn tile(d: &mut Dash, keys: Vec<String>, from: View) {
     enter(d);
     if keys.is_empty() {
+        return;
+    }
+    // a locked Tile stays as you left it
+    if let Some(i) = d
+        .wall
+        .windows
+        .iter()
+        .position(|w| w.name == TILE && w.locked)
+    {
+        d.wall.cur = i;
+        d.wall.back = Some(from);
+        d.switch(View::Wall);
         return;
     }
     d.wall.drop_window(TILE);
@@ -1045,11 +1068,15 @@ pub(crate) fn empty_pane(d: &mut Dash) -> Option<u32> {
     if matches!(d.wall.content_of_focus(), Some(Content::Empty)) {
         return Some(focus);
     }
+    if refused(d) {
+        return None;
+    }
     let id = d.wall.new_pane(Content::Empty);
     let dir = best_dir(&d.wall, focus);
     if let Some(w) = d.wall.win_mut() {
         w.root.split(focus, id, dir);
         w.focus = id;
+        w.handmade = true;
     }
     d.wall.dirty = true;
     Some(id)
@@ -1058,13 +1085,13 @@ pub(crate) fn empty_pane(d: &mut Dash) -> Option<u32> {
 /// A session into the focused pane (if it's empty) or a new split beside it.
 pub(crate) fn add(d: &mut Dash, key: String) {
     enter(d);
+    let empty = matches!(d.wall.content_of_focus(), Some(Content::Empty));
+    if !empty && refused(d) {
+        return;
+    }
     let st = &mut d.wall;
     let Some(f) = st.focus() else { return };
-    if st
-        .panes
-        .get(&f)
-        .is_some_and(|p| p.content == Content::Empty)
-    {
+    if empty {
         if let Some(p) = st.panes.get_mut(&f) {
             p.content = Content::Session(key);
         }
@@ -1074,6 +1101,7 @@ pub(crate) fn add(d: &mut Dash, key: String) {
         if let Some(w) = st.win_mut() {
             w.root.split(f, id, dir);
             w.focus = id;
+            w.handmade = true;
         }
     }
     st.dirty = true;
@@ -1375,10 +1403,41 @@ enum Cmd {
     StopTyping,
     Detach,
     Cheats,
+    Lock,
+}
+
+/// Is this window's layout locked? It says so when it is.
+fn refused(d: &mut Dash) -> bool {
+    let locked = d.wall.win().is_some_and(|w| w.locked);
+    if locked {
+        d.toast(Level::Info, "this layout is locked: L unlocks it");
+    }
+    locked
 }
 
 fn run(d: &mut Dash, cmd: Cmd) {
     let Some(focus) = d.wall.focus() else { return };
+    let changes = matches!(
+        cmd,
+        Cmd::SplitSide
+            | Cmd::SplitStack
+            | Cmd::Close
+            | Cmd::CloseWindow
+            | Cmd::NextLayout
+            | Cmd::SwapNext
+            | Cmd::SwapPrev
+            | Cmd::Grow(..)
+            | Cmd::Equalize
+    );
+    if changes && refused(d) {
+        return;
+    }
+    // what you arrange by hand, `space` keeps among the layouts
+    if changes && cmd != Cmd::NextLayout {
+        if let Some(w) = d.wall.win_mut() {
+            w.handmade = true;
+        }
+    }
     let st = &mut d.wall;
     match cmd {
         Cmd::SplitSide | Cmd::SplitStack => {
@@ -1468,11 +1527,26 @@ fn run(d: &mut Dash, cmd: Cmd) {
         Cmd::NextLayout => {
             let mut name = "";
             if let Some(w) = st.win_mut() {
-                w.layout = (w.layout + 1) % LAYOUTS.len();
+                // your own arrangement is the slot after the presets, for as
+                // long as it holds the same panes
+                if std::mem::take(&mut w.handmade) {
+                    w.own = Some(w.root.clone());
+                    w.layout = LAYOUTS.len();
+                }
                 let l = w.root.leaves();
-                w.root = preset(&l, w.layout);
+                let mine = |o: &Node| {
+                    let (mut a, mut b) = (o.leaves(), l.clone());
+                    a.sort_unstable();
+                    b.sort_unstable();
+                    a == b
+                };
+                let own = w.own.clone().filter(mine);
+                w.layout = (w.layout + 1) % (LAYOUTS.len() + usize::from(own.is_some()));
+                (w.root, name) = match LAYOUTS.get(w.layout) {
+                    Some(n) => (preset(&l, w.layout), *n),
+                    None => (own.unwrap_or_else(|| preset(&l, 0)), "your own"),
+                };
                 w.zoom = false;
-                name = LAYOUTS[w.layout];
             }
             d.toast(Level::Info, format!("layout: {name}"));
         }
@@ -1533,6 +1607,21 @@ fn run(d: &mut Dash, cmd: Cmd) {
             return;
         }
         Cmd::Cheats => st.cheats = !st.cheats,
+        Cmd::Lock => {
+            let mut on = false;
+            if let Some(w) = st.win_mut() {
+                w.locked = !w.locked;
+                on = w.locked;
+            }
+            d.toast(
+                Level::Info,
+                if on {
+                    "layout locked: nothing splits, closes, swaps or resizes it (L unlocks)"
+                } else {
+                    "layout unlocked"
+                },
+            );
+        }
     }
     d.wall.dirty = true;
 }
@@ -1592,6 +1681,7 @@ fn tmux(k: &KeyEvent) -> Option<Cmd> {
         KeyCode::Char(';') => Cmd::Prev,
         KeyCode::Char('x') => Cmd::Close,
         KeyCode::Char('z') => Cmd::Zoom,
+        KeyCode::Char('L') => Cmd::Lock,
         KeyCode::Char('c') => Cmd::NewWindow,
         KeyCode::Char('n') => Cmd::NextWindow,
         KeyCode::Char('p') => Cmd::PrevWindow,
@@ -1922,12 +2012,16 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
         KeyCode::Char('j') | KeyCode::Down => run(d, Cmd::Move(0, 1)),
         // split, then pick what goes in the new pane (esc leaves it empty: n starts one)
         KeyCode::Char('v') | KeyCode::Char('%') | KeyCode::Char('|') => {
-            run(d, Cmd::SplitSide);
-            d.mode = Mode::Palette(super::palette::Palette::sessions_only(d));
+            if !refused(d) {
+                run(d, Cmd::SplitSide);
+                d.mode = Mode::Palette(super::palette::Palette::sessions_only(d));
+            }
         }
         KeyCode::Char('s') | KeyCode::Char('"') | KeyCode::Char('_') => {
-            run(d, Cmd::SplitStack);
-            d.mode = Mode::Palette(super::palette::Palette::sessions_only(d));
+            if !refused(d) {
+                run(d, Cmd::SplitStack);
+                d.mode = Mode::Palette(super::palette::Palette::sessions_only(d));
+            }
         }
         // the machines: ctrl+[ ctrl+], ( ) where a terminal can't tell them
         _ if super::machine_step(&k).is_some() => {
@@ -1941,6 +2035,7 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
         KeyCode::Char('o') => run(d, Cmd::Next),
         KeyCode::Char('x') => run(d, Cmd::Close),
         KeyCode::Char('z') => run(d, Cmd::Zoom),
+        KeyCode::Char('L') => run(d, Cmd::Lock),
         KeyCode::Char('c') => run(d, Cmd::NewWindow),
         KeyCode::Char('w') => run(d, Cmd::NextWindow),
         KeyCode::Char('W') => run(d, Cmd::PrevWindow),
@@ -2320,7 +2415,15 @@ pub(crate) fn drop_ended(d: &mut Dash) {
                 p.seen = true;
             }
         } else if seen && up && !keep {
-            drop_tile(d, id);
+            // (a locked layout keeps the tile: it says the session ended)
+            let locked = d
+                .wall
+                .windows
+                .iter()
+                .any(|w| w.locked && w.root.leaves().contains(&id));
+            if !locked {
+                drop_tile(d, id);
+            }
         }
     }
 }
@@ -2620,7 +2723,8 @@ pub(crate) fn mouse(d: &mut Dash, m: MouseEvent) {
             // grab a divider: the boundary between a split's two halves, from
             // the borders (on a pane's screen a press is the start of a selection)
             let root = d.wall.win().map(|w| w.root.clone());
-            if let Some(root) = root.filter(|_| d.wall.selection.is_none()) {
+            let locked = d.wall.win().is_some_and(|w| w.locked);
+            if let Some(root) = root.filter(|_| d.wall.selection.is_none() && !locked) {
                 for (path, r, dir) in d.wall.dividers.clone() {
                     let ratio = root.ratio_at(&path).unwrap_or(0.5);
                     let hit = match dir {
@@ -2675,6 +2779,7 @@ pub(crate) fn mouse(d: &mut Dash, m: MouseEvent) {
                     if let Some(Node::Split { ratio: rt, .. }) = w.root.at_path(&path) {
                         *rt = ratio.clamp(0.1, 0.9);
                     }
+                    w.handmade = true;
                 }
                 d.wall.dirty = true;
             }
@@ -2722,6 +2827,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
             ("a", "add existing"),
             ("S", "shell"),
             ("v s", "split"),
+            ("z", "maximise"),
             ("hjkl", "move"),
             ("x", "close pane"),
             ("?", "keys"),
@@ -2748,6 +2854,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
             ("O", "new tab"),
             ("X", "close"),
             ("v s", "split"),
+            ("z", "maximise"),
             ("hjkl", "move"),
             ("?", "keys"),
         ],
@@ -3380,6 +3487,15 @@ fn status_bar(d: &mut Dash, f: &mut Frame, r: Rect) {
         ));
     }
     d.wall.tabs = tabs;
+    if d.wall.win().is_some_and(|w| w.locked) {
+        l.push(Span::styled(
+            " locked",
+            ui::fg(c::YELLOW()).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if d.wall.win().is_some_and(|w| w.zoom) && d.wall.in_tile() {
+        l.push(Span::styled(" maximised · z back", ui::fg(c::ACCENT())));
+    }
     if let Some(s) = d.wall.focus().and_then(|id| session_of(d, id)) {
         l.push(Span::styled("   ", ui::faint()));
         l.push(Span::styled(
@@ -3452,7 +3568,8 @@ pub(crate) fn cheatsheet(d: &Dash, f: &mut Frame, area: Rect) {
         row("v · s", "split side by side · stacked"),
         row("o", "next pane"),
         row("x", "close pane (session lives on)"),
-        row("z", "zoom the pane"),
+        row("z", "maximise the pane, z again goes back"),
+        row("L", "lock the layout: nothing splits, closes, swaps or resizes it"),
         row("< > - +  =", "resize · equalise"),
         row("space", "next layout"),
         row("{ }", "swap panes"),

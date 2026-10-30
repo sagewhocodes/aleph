@@ -672,7 +672,11 @@ pub(crate) fn lines(d: &Dash) -> Vec<Line<'static>> {
             "y · K · m · b",
             "approve · keys · prompt · broadcast to the window",
         ),
-        ("z · x · space", "zoom · close pane · next layout"),
+        (
+            "z · x · space",
+            "maximise and back · close pane · next layout (your own arrangement stays among them)",
+        ),
+        ("L", "lock the layout: nothing splits, closes, swaps or resizes it"),
         (
             "c · w W · ,",
             "new window · next / previous window · rename",

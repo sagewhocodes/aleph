@@ -8,6 +8,12 @@
   reach the agent, and option+drag goes to it for an agent's own dragging. `focus.copy_on_select` off keeps the selection
   until the next key, and Cmd+C copies it where the terminal passes Cmd+C on.
 
+### Tile layouts
+- **`L` locks a layout:** nothing splits, closes, swaps or resizes it, a session ending keeps its tile, and `w` comes back
+  to it as you left it.
+- **`z` maximises a tile, `z` goes back,** and the status line says so.
+- `space` no longer loses what you arranged by hand: your own arrangement is one of the layouts it cycles through.
+
 ### Keys that changed
 - **`ctrl+q` is the way out.** While typing into an agent it gives the keys back to Aleph; pressed again it goes to Fleet.
   `ctrl+]` isn't Aleph's any more and reaches the agent. The prefix and then `ctrl+q` sends it to the pane, for a shell

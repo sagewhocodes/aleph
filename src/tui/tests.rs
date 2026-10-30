@@ -4536,6 +4536,100 @@ fn brackets_step_sessions_and_ctrl_brackets_step_machines() {
     assert_eq!(d.mon.sel, 1);
 }
 
+/// `L` locks a Tile's arrangement; `z` still maximises; `space` keeps your own.
+#[test]
+fn a_locked_layout_stays_and_space_keeps_your_own() {
+    let mut d = dash_own();
+    let _ = render(&mut d, 140, 40);
+    let keys: Vec<String> = vec!["b31|w1:p1".into(), "b31|w1:p2".into(), "gpu2|w1:p4".into()];
+    wall::tile(&mut d, keys.clone(), View::Fleet);
+    let _ = render(&mut d, 140, 40);
+    let shape = |d: &Dash| d.wall.win().unwrap().root.to_json().to_string();
+    let panes = |d: &Dash| d.wall.win().unwrap().root.leaves().len();
+    let press = |d: &mut Dash, c| {
+        d.on_key(k(KeyCode::Char(c)));
+    };
+    // arranged by hand: wider on one side
+    press(&mut d, '>');
+    let mine = shape(&d);
+    // space walks the presets and comes back to yours
+    let mut seen = vec![];
+    for _ in 0..5 {
+        press(&mut d, ' ');
+        seen.push(shape(&d));
+    }
+    assert_ne!(seen[0], mine);
+    assert_eq!(seen[4], mine, "your own is among them");
+    assert!(d
+        .current_toast()
+        .is_some_and(|t| t.text.contains("your own")));
+    // locked: nothing changes it, and it says how to unlock
+    press(&mut d, 'L');
+    assert!(render(&mut d, 140, 40).contains("locked"));
+    let before = shape(&d);
+    for c in ['v', 's', 'x', ' ', '<', '>', '{', '}', '='] {
+        press(&mut d, c);
+        assert!(matches!(d.mode, Mode::Normal), "{c}");
+        assert_eq!(shape(&d), before, "{c}");
+    }
+    assert!(d
+        .current_toast()
+        .is_some_and(|t| t.text.contains("L unlocks")));
+    // no divider to grab either: dragging from anywhere on the row changes nothing
+    super::COPIED.with(|c| *c.borrow_mut() = Some(String::new()));
+    let sweep = |d: &mut Dash| {
+        let _ = render(d, 140, 40);
+        for column in 0..120 {
+            for (kind, column) in [
+                (MouseEventKind::Down(MouseButton::Left), column),
+                (MouseEventKind::Drag(MouseButton::Left), column + 9),
+                (MouseEventKind::Up(MouseButton::Left), column + 9),
+            ] {
+                wall::mouse(
+                    d,
+                    MouseEvent {
+                        kind,
+                        column,
+                        row: 12,
+                        modifiers: KeyModifiers::NONE,
+                    },
+                );
+            }
+        }
+    };
+    sweep(&mut d);
+    assert_eq!(shape(&d), before);
+    assert_eq!(panes(&d), 3);
+    d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    wall::tile(
+        &mut d,
+        vec!["b31|w1:p1".into(), "b31|w1:p2".into(), "gpu2|w1:p4".into()],
+        View::Fleet,
+    );
+    // maximise and back still work
+    press(&mut d, 'z');
+    assert!(d.wall.win().unwrap().zoom);
+    assert!(render(&mut d, 140, 40).contains("maximised"));
+    press(&mut d, 'z');
+    assert!(!d.wall.win().unwrap().zoom);
+    // w comes back to a locked Tile as you left it
+    d.switch(View::Fleet);
+    wall::tile(&mut d, keys.clone(), View::Fleet);
+    assert_eq!(shape(&d), before);
+    // unlocked: it changes again (a border's divider moves), and w starts afresh
+    press(&mut d, 'L');
+    sweep(&mut d);
+    assert_ne!(shape(&d), before);
+    super::COPIED.with(|c| *c.borrow_mut() = None);
+    // (a click on a tile gives it the keys: they come back first)
+    leave_typing(&mut d);
+    press(&mut d, 'x');
+    assert_eq!(panes(&d), 2);
+    d.switch(View::Fleet);
+    wall::tile(&mut d, keys, View::Fleet);
+    assert_eq!(panes(&d), 3);
+}
+
 /// A drag across any tile selects there and copies on release. Clicks still
 /// reach the agent, option+drag goes to it, and the keys end a selection.
 #[test]
