@@ -21,6 +21,16 @@
   sessions start a fresh one; `&` closes it.
 - **`alt+arrows` move between panes while typing,** and the keys go with you. With one pane they're the agent's.
 
+### Terminals
+- **Every plain terminal herdr has is listed,** not only those Aleph started (`shell.list = aleph` for the old way). None
+  of them is ever restored or closed by Aleph.
+- **Each machine has a standing terminal.** `!` on a machine's row opens it, making it the first time; `!` on a session
+  opens the terminal already in that folder if there is one. `shell.ready = startup` makes each machine's as soon as it
+  answers.
+- A pane herdr couldn't bring back after a restart says why on its row.
+- `ctrl+q` in Fleet no longer quits Aleph: one press too many while backing out of Focus would have closed it. Plain `q`
+  still does.
+
 ### Keys that changed
 - **`ctrl+q` is the way out.** While typing into an agent it gives the keys back to Aleph; pressed again it goes to Fleet.
   `ctrl+]` isn't Aleph's any more and reaches the agent. The prefix and then `ctrl+q` sends it to the pane, for a shell

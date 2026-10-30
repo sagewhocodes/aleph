@@ -492,6 +492,9 @@ pub fn label(kind: &str) -> String {
 /// Not an agent: a herdr tab with just your shell in it (`aleph local shell`).
 pub const SHELL: &str = "shell";
 
+/// The name of a machine's standing terminal (`shell.ready`).
+pub const READY_SHELL: &str = "ready";
+
 /// Whether an installed version is one Aleph supports (`Agent::min_version`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Support {

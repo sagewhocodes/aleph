@@ -471,6 +471,8 @@ fn to_session(s: &world::Sess) -> Session {
         done_seq: s.at.done_seq,
         compacting: false,
         compacted: false,
+        plain: false,
+        restore_error: None,
         ready: (!shell).then(|| s.status() != "working"),
         native_id: (!shell).then(|| world::conversation(&s.host, &s.pane)),
     }

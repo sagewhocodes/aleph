@@ -1073,6 +1073,16 @@ pub fn fill_names(o: &mut NewOpts) {
     }
 }
 
+/// A machine's standing terminal (`shell.ready`), started in the background.
+pub fn start_ready_shell(cfg: &Config, t: &crate::config::Target) -> Result<(), String> {
+    let mut o = parse_new(&["--host".into(), t.ssh.clone()], cfg)?.opts;
+    o.agent = crate::agents::SHELL.into();
+    o.name = Some(crate::agents::READY_SHELL.into());
+    o.no_focus = true;
+    fill_names(&mut o);
+    Herdr::new(t).new_session(&o, &mut |_, _| {}).map(|_| ())
+}
+
 /// `aleph shell [host] [dir] [--detach]`: a plain terminal (no agent) in
 /// herdr on a machine, for running commands — `new --agent shell` with the
 /// machine and folder as words.

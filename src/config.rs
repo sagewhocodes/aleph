@@ -190,6 +190,8 @@ pub fn section_of(key: &str) -> &'static str {
         | "focus.esc_guard"
         | "focus.copy_on_select"
         | "close.grace"
+        | "shell.list"
+        | "shell.ready"
         | "wall_fit"
         | "wall_layout"
         | "wall_max"
@@ -446,6 +448,18 @@ pub const KNOWN: &[Known] = &[
         default: "true",
         kind: Kind::Bool,
         help: "while typing into an agent, the first esc is held back with a warning (esc stops most agents' work); a second within 3 s goes to the agent, and so do the ones right after it",
+    },
+    Known {
+        key: "shell.list",
+        default: "all",
+        kind: Kind::Choice(&["all", "aleph"]),
+        help: "which plain terminals Fleet lists: all (every pane herdr has with no agent in it) or aleph (only those Aleph started)",
+    },
+    Known {
+        key: "shell.ready",
+        default: "first-use",
+        kind: Kind::Choice(&["first-use", "startup"]),
+        help: "each machine's standing terminal, the one ! opens on a machine's row: first-use (made the first time you ask, then kept) or startup (made as soon as the machine answers, which adds a pane there)",
     },
     Known {
         key: "close.exited",

@@ -506,6 +506,8 @@ pub struct Fleet {
     pub all_agents: bool,
     /// the agents listed when `all_agents` is off
     pub agents: Filter,
+    /// list every pane with no agent, or only the shells Aleph started (`shell.list`)
+    pub plain_shells: bool,
     pub interval: Duration,
     /// what the Inbox hears of outages (`inbox.down_grace`, `inbox.machine_back`)
     pub outages: Outages,
@@ -675,6 +677,7 @@ impl Fleet {
             hosts: Vec::new(),
             all_agents: agents.is_all(),
             agents,
+            plain_shells: cfg.get_or("shell.list") != "aleph",
             interval: cfg.refresh_dur(),
             outages: Outages::from_cfg(cfg),
             tx,
@@ -713,6 +716,7 @@ impl Fleet {
             hosts: Vec::new(),
             all_agents: true,
             agents,
+            plain_shells: true,
             interval: Duration::from_secs(1),
             outages: Outages {
                 grace: 30,
@@ -939,6 +943,11 @@ impl Fleet {
         }
     }
 
+    /// Follow a new value of the `shell.list` setting.
+    pub fn set_shells(&mut self, setting: &str) {
+        self.plain_shells = setting != "aleph";
+    }
+
     /// Follow a new value of the `agents` setting (`all`, or agent ids).
     pub fn set_agents(&mut self, setting: &str) {
         self.agents = Filter::parse(setting).unwrap_or_default();
@@ -961,6 +970,7 @@ impl Fleet {
 
     fn poll(&mut self, alias: &str) {
         let filter = self.filter();
+        let plain_shells = self.plain_shells;
         let g = {
             let e = self.gen.entry(alias.to_string()).or_insert(0);
             *e += 1;
@@ -992,6 +1002,10 @@ impl Fleet {
             };
             let h = Herdr::new(&t);
             let mut res = h.sessions_matching(&filter);
+            // `shell.list = aleph`: only the shells Aleph started
+            if let (false, Ok(v)) = (plain_shells, res.as_mut()) {
+                v.retain(|s| !s.plain);
+            }
             // herdr doesn't restore pane tokens after a server restart: give
             // sessions that lost their hue/mark one again (once per run)
             if let Ok(v) = res.as_mut() {
@@ -1548,6 +1562,7 @@ pub fn session_to_json(s: &Session) -> Value {
         "mark": s.mark, "hue": s.hue, "focused": s.focused, "limit": s.limit,
         "seq": s.seq, "done_seq": s.done_seq, "ready": s.ready, "native_id": s.native_id,
         "compacting": s.compacting, "compacted": s.compacted,
+        "plain": s.plain, "restore_error": s.restore_error,
     })
 }
 
@@ -1582,6 +1597,11 @@ pub(crate) fn session_from_json(v: &Value) -> Option<Session> {
             .and_then(Value::as_bool)
             .unwrap_or(false),
         compacted: v.get("compacted").and_then(Value::as_bool).unwrap_or(false),
+        plain: v.get("plain").and_then(Value::as_bool).unwrap_or(false),
+        restore_error: v
+            .get("restore_error")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         native_id: v
             .get("native_id")
             .and_then(Value::as_str)
@@ -1724,6 +1744,7 @@ mod tests {
             hosts: vec![],
             all_agents: false,
             agents: Filter::Only(vec!["claude"]),
+            plain_shells: true,
             interval: Duration::from_secs(10),
             outages: Outages {
                 grace: 30,

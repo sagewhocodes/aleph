@@ -729,6 +729,23 @@ pub(crate) fn start(d: &mut Dash, q: QuickStart, focus: bool) -> Option<Handoff>
 /// `!`: a plain terminal (no agent) on `host`, in `dir` (else where herdr
 /// opens one), started in the background, then opened in Focus to type into.
 pub(crate) fn shell(d: &mut Dash, host: &str, dir: Option<&str>) {
+    // one that's ready: the machine's standing terminal, or one already in that
+    // folder. Straight there, nothing new made
+    let ready = d.fleet.host(host).and_then(|h| {
+        h.sessions
+            .iter()
+            .filter(|s| s.agent == crate::agents::SHELL)
+            .find(|s| match dir {
+                Some(p) => s.cwd == p,
+                None => s.name == crate::agents::READY_SHELL,
+            })
+            .map(Session::key)
+    });
+    if let Some(key) = ready {
+        let from = d.view;
+        super::wall::focus_on(d, &key, from);
+        return;
+    }
     let mut o = match crate::cli::parse_new(&["--host".into(), host.to_string()], &d.cfg) {
         Ok(x) => x.opts,
         Err(e) => {
@@ -737,8 +754,9 @@ pub(crate) fn shell(d: &mut Dash, host: &str, dir: Option<&str>) {
         }
     };
     o.agent = crate::agents::SHELL.into();
-    if let Some(p) = dir {
-        o.dir = Some(crate::path::normalize(p.as_bytes()));
+    match dir {
+        Some(p) => o.dir = Some(crate::path::normalize(p.as_bytes())),
+        None => o.name = Some(crate::agents::READY_SHELL.into()),
     }
     o.no_focus = true;
     o.live = d.fleet.live_names();

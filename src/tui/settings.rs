@@ -720,6 +720,7 @@ fn apply_live(d: &mut Dash, key: &str) {
         }
         "icons" => crate::icons::init(&d.cfg.get_or("icons")),
         "agents" => d.fleet.set_agents(&d.cfg.get_or("agents")),
+        "shell.list" => d.fleet.set_shells(&d.cfg.get_or("shell.list")),
         k if k.starts_with("inbox.") => super::inbox::apply_settings(d),
         k if k.starts_with("host.") && k.ends_with(".session") => crate::chan::set_sessions(&d.cfg),
         k if k.starts_with("key.") || k.starts_with("action.") => {

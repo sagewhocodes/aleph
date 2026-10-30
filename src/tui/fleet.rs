@@ -1203,6 +1203,9 @@ pub(crate) fn status_spans(s: &Session, t0: Instant) -> (String, Color) {
     if let Some(r) = &s.limit {
         return (limit_text(r), c::LIMIT());
     }
+    if let Some(e) = &s.restore_error {
+        return (format!("✗ didn't come back: {e}"), c::RED());
+    }
     let (g, col, mut label) = ui::status(&s.status, t0);
     if s.compacting {
         label = "compacting".into();

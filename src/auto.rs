@@ -232,6 +232,13 @@ impl HubLock {
 
 // ------------------------------------------------------------------ the hub
 
+/// Has this machine its standing terminal already?
+fn has_ready_shell(h: &crate::fleet::Host) -> bool {
+    h.sessions
+        .iter()
+        .any(|s| s.agent == crate::agents::SHELL && s.name == crate::agents::READY_SHELL)
+}
+
 pub struct Hub {
     /// a queue dispatch is in flight
     busy: Arc<AtomicBool>,
@@ -260,6 +267,8 @@ pub struct Hub {
     states: crate::statelog::Writer,
     /// closes waiting out their grace (`closing.json`), carried out here
     pub closer: crate::closing::Closer,
+    /// machines whose standing terminal was seen to (`shell.ready = startup`)
+    readied: HashSet<String>,
     /// the session journal: today's file now and then, yesterday's finished
     journal: crate::journal::Writer,
 }
@@ -287,6 +296,7 @@ impl Hub {
             last_purge: None,
             states: crate::statelog::Writer::new(),
             closer: Default::default(),
+            readied: HashSet::new(),
             journal: Default::default(),
         }
     }
@@ -320,6 +330,7 @@ impl Hub {
             }
         }
         self.states.observe(fleet);
+        self.ready_shells(cfg, fleet);
         self.journal.tick(cfg, fleet);
         self.limits(cfg, fleet);
         // a question just answered: its Inbox item goes now, not in 10 s
@@ -504,6 +515,26 @@ impl Hub {
             }
         }
         self.limited.retain(|k| now.contains(k));
+    }
+
+    /// `shell.ready = startup`: each machine's standing terminal, once, as soon as
+    /// it answers and only if it has none. Never in a pane already there.
+    fn ready_shells(&mut self, cfg: &Config, fleet: &Fleet) {
+        if cfg.get_or("shell.ready") != "startup" || crate::showcase::demo() {
+            return;
+        }
+        for h in &fleet.hosts {
+            if h.conn != crate::fleet::Conn::Up || h.stale || h.paused {
+                continue;
+            }
+            if !self.readied.insert(h.alias.clone()) || has_ready_shell(h) {
+                continue;
+            }
+            let (cfg, t) = (cfg.clone(), h.target.clone());
+            thread::spawn(move || {
+                let _ = crate::cli::start_ready_shell(&cfg, &t);
+            });
+        }
     }
 
     fn approve(&self, cfg: &Config, fleet: &Fleet, s: &herdr::Session) {

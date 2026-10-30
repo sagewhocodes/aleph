@@ -4536,6 +4536,50 @@ fn brackets_step_sessions_and_ctrl_brackets_step_machines() {
     assert_eq!(d.mon.sel, 1);
 }
 
+/// `!` goes to a terminal that's ready rather than making another: the machine's
+/// standing one, or one already in that folder.
+#[test]
+fn a_ready_terminal_opens_instead_of_a_new_one() {
+    let mut d = dash_own();
+    let _ = render(&mut d, 140, 40);
+    let shell = |pane: &str, name: &str, cwd: &str| crate::herdr::Session {
+        host: "b31".into(),
+        pane_id: pane.into(),
+        tab_id: format!("t{pane}"),
+        name: name.into(),
+        label: format!("shell_{name}"),
+        agent: crate::agents::SHELL.into(),
+        status: "idle".into(),
+        cwd: cwd.into(),
+        ..Default::default()
+    };
+    let h = d.fleet.host_mut("b31").unwrap();
+    h.sessions
+        .push(shell("w1:p70", crate::agents::READY_SHELL, "/home/u"));
+    h.sessions.push(shell("w1:p71", "other", "/srv/ox"));
+    // on the machine's row: its standing terminal, typing or not as Focus opens
+    d.fv.sel = Some(fleet::RowId::Host("b31".into()));
+    super::quick::shell(&mut d, "b31", None);
+    assert!(d.view == View::Wall && d.wall.in_focus());
+    let open = |d: &Dash| match d.wall.content_of_focus() {
+        Some(wall::Content::Session(k)) => k.clone(),
+        _ => String::new(),
+    };
+    assert_eq!(open(&d), "b31|w1:p70");
+    // a folder that has one: that one
+    super::quick::shell(&mut d, "b31", Some("/srv/ox"));
+    assert_eq!(open(&d), "b31|w1:p71");
+    // leaving Focus closes nothing
+    d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    assert_eq!(d.view, View::Fleet);
+    assert!(fleet::session(&d, "b31|w1:p70").is_some());
+    // herdr couldn't bring one back: the row says why
+    d.fleet.host_mut("b31").unwrap().sessions[3].restore_error = Some("cwd gone".into());
+    let s = render(&mut d, 160, 40);
+    assert!(s.contains("didn't come back: cwd gone"), "{s}");
+}
+
 /// Free splits: any session or terminal from any machine, kept when you leave,
 /// and alt+arrows move between them while typing.
 #[test]
@@ -4822,6 +4866,10 @@ fn ctrl_q_gives_the_keys_back_then_goes_to_fleet() {
     );
     d.on_key(ctrl('q'));
     assert_eq!(d.view, View::Fleet);
+    // one press too many doesn't close the dashboard; a plain q still does
+    assert!(d.on_key(ctrl('q')).is_none());
+    assert_eq!(d.view, View::Fleet);
+    assert!(matches!(d.on_key(k(KeyCode::Char('q'))), Some(Handoff::Quit)));
     wall::focus_on(&mut d, "b31|w1:p1", View::Inbox);
     d.on_key(ctrl('q'));
     d.on_key(k(KeyCode::Esc));

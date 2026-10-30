@@ -129,7 +129,8 @@ pub fn reconcile(
             .any(|(n, p)| *n == s.name && *p == s.pane_id)
     });
     for s in live {
-        if s.name.is_empty() {
+        // (a pane Aleph didn't start isn't Aleph's to bring back)
+        if s.name.is_empty() || s.plain {
             continue;
         }
         match known

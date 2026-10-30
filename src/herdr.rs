@@ -59,6 +59,10 @@ pub struct Session {
     pub compacting: bool,
     /// at rest because a compaction ended, not because a turn did
     pub compacted: bool,
+    /// a pane with no agent in a tab Aleph didn't start for a shell (`shell.list`)
+    pub plain: bool,
+    /// herdr couldn't bring this pane back after a restart: why
+    pub restore_error: Option<String>,
 }
 
 impl Session {
@@ -67,6 +71,10 @@ impl Session {
     /// without the agent prefix for story names (`claude_smoldering-heron` →
     /// `smoldering-heron`: the creature says the agent already).
     pub fn display(&self) -> &str {
+        // (a pane whose tab has no label)
+        if self.label.is_empty() {
+            return &self.name;
+        }
         let b = base_label(&self.label);
         match b.split_once('_') {
             Some((p, rest))
@@ -2022,6 +2030,8 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
         .collect();
     let mut aobjs = Vec::new();
     objects(agents, &mut aobjs);
+    // every agent's pane, listed or not: none of them is a plain shell
+    let agent_panes: Vec<String> = aobjs.iter().filter_map(|m| s(m, &["pane_id"])).collect();
     let mut out: Vec<Session> = Vec::new();
     for m in aobjs {
         let Some(pane) = s(m, &["pane_id"]) else {
@@ -2082,23 +2092,27 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
                 .map(String::from),
             compacting: false,
             compacted: false,
+            plain: false,
+            restore_error: None,
         });
     }
-    // plain shells Aleph started (`shell_<name>` tabs): their panes, which
-    // have no agent row (only `api snapshot` lists panes)
+    // plain shells: panes with no agent (only `api snapshot` lists panes). Those
+    // Aleph started have `shell_<name>` tabs; any other is `plain`
     for m in tobjs.iter().filter(|m| m.contains_key("pane_id")) {
         let (Some(pane), Some(tab)) = (s(m, &["pane_id"]), s(m, &["tab_id"])) else {
             continue;
         };
-        let Some((_, label)) = labels.iter().find(|(t, _)| *t == tab) else {
-            continue;
-        };
-        let shell_tab = label
-            .split_once('_')
-            .is_some_and(|(p, _)| p == crate::agents::SHELL);
-        if !shell_tab || out.iter().any(|x| x.pane_id == pane || x.tab_id == tab) {
+        if agent_panes.contains(&pane) || s(m, &["agent"]).is_some_and(|a| !a.is_empty()) {
             continue;
         }
+        let label = labels
+            .iter()
+            .find(|(t, _)| *t == tab)
+            .map_or(String::new(), |x| x.1.clone());
+        let ours = label
+            .split_once('_')
+            .is_some_and(|(p, _)| p == crate::agents::SHELL);
+        let name = names::from_label(&label);
         out.push(Session {
             host: String::new(),
             status: "idle".into(),
@@ -2107,13 +2121,22 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
             terminal_id: s(m, &["terminal_id"]).unwrap_or_default(),
             focused: m.get("focused").and_then(Value::as_bool).unwrap_or(false),
             mark: "·".into(),
+            name: if name.is_empty() { pane.clone() } else { name },
             pane_id: pane,
             tab_id: tab,
-            label: label.clone(),
-            name: names::from_label(label),
+            label,
             agent: crate::agents::SHELL.into(),
+            plain: !ours,
             ..Default::default()
         });
+    }
+    // what herdr couldn't bring back after a restart
+    for m in tobjs.iter().filter(|m| m.contains_key("pane_id")) {
+        if let (Some(pane), Some(e)) = (s(m, &["pane_id"]), s(m, &["restore_error"])) {
+            if let Some(x) = out.iter_mut().find(|x| x.pane_id == pane) {
+                x.restore_error = Some(e);
+            }
+        }
     }
     out.sort_by(|a, b| a.label.cmp(&b.label));
     out
@@ -2473,14 +2496,54 @@ mod tests {
             ]
         });
         let v = parse_sessions(&agents, &tabs, &Filter::Only(vec!["claude"]));
-        assert_eq!(v.len(), 2, "{v:?}");
-        let sh = v.iter().find(|s| s.agent == crate::agents::SHELL).unwrap();
+        assert_eq!(v.len(), 3, "{v:?}");
+        // a pane in a tab that isn't Aleph's is a shell too, marked as such
+        let other = v.iter().find(|s| s.pane_id == "w1:p3").unwrap();
+        assert!(other.plain && other.agent == crate::agents::SHELL);
+        assert_eq!(other.name, "scratch");
+        let sh = v.iter().find(|s| s.pane_id == "w1:p2").unwrap();
+        assert!(!sh.plain);
         assert_eq!((sh.pane_id.as_str(), sh.status.as_str()), ("w1:p2", "idle"));
         assert_eq!(
             (sh.name.as_str(), sh.display()),
             ("frosting-crane", "frosting-crane")
         );
         assert_eq!(sh.cwd, "/srv/px/src");
+    }
+
+    #[test]
+    fn an_agent_left_out_of_the_list_is_never_taken_for_a_shell() {
+        let agents = serde_json::json!({"agents": [
+            {"pane_id": "w1:p1", "tab_id": "w1:t1", "agent": "claude", "agent_status": "idle"},
+            {"pane_id": "w1:p2", "tab_id": "w1:t1", "agent": "codex", "agent_status": "idle"}
+        ]});
+        let tabs = serde_json::json!({
+            "tabs": [{"tab_id": "w1:t1", "label": "work"}],
+            "panes": [
+                {"pane_id": "w1:p1", "tab_id": "w1:t1"},
+                {"pane_id": "w1:p2", "tab_id": "w1:t1", "agent": "codex"},
+                {"pane_id": "w1:p3", "tab_id": "w1:t1", "restore_error": "cwd gone"},
+                {"pane_id": "w1:p4", "tab_id": "w1:t9"}
+            ]
+        });
+        let v = parse_sessions(&agents, &tabs, &Filter::Only(vec!["claude"]));
+        let panes: Vec<&str> = v.iter().map(|s| s.pane_id.as_str()).collect();
+        assert!(!panes.contains(&"w1:p2"), "{panes:?}");
+        // beside an agent in its tab: a shell, with why it didn't come back
+        let sh = v.iter().find(|s| s.pane_id == "w1:p3").unwrap();
+        assert_eq!(sh.restore_error.as_deref(), Some("cwd gone"));
+        // its tab unnamed: its own id names it
+        let bare = v.iter().find(|s| s.pane_id == "w1:p4").unwrap();
+        assert_eq!((bare.name.as_str(), bare.display()), ("w1:p4", "w1:p4"));
+        // a machine's standing terminal is known by its name
+        let standing = Session {
+            label: "shell_ready:home".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            names::from_label(&standing.label),
+            crate::agents::READY_SHELL
+        );
     }
 
     #[test]
