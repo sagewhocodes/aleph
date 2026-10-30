@@ -4287,6 +4287,238 @@ fn the_palette_opens_usage_for_one_machine_or_agent() {
 }
 
 #[test]
+fn the_inbox_counts_what_it_lists() {
+    use crate::events::{Event, Kind};
+    let now = crate::cache::now();
+    let ev = |name: &str, kind, t, title: &str| Event {
+        t,
+        host: "b31".into(),
+        name: name.into(),
+        kind,
+        title: title.into(),
+        agent: "claude".into(),
+        ..Default::default()
+    };
+    let rows = || {
+        vec![
+            ev("a", Kind::Blocked, now - 10, "Run tests?"),
+            // finished turns, which inbox.finished = none leaves out of the list
+            ev("b", Kind::Done, now - 20, "done"),
+            ev("c", Kind::Done, now - 30, "done"),
+            // a run of the same event is one row
+            ev("d", Kind::Error, now - 40, "boom"),
+            ev("d", Kind::Error, now - 50, "boom"),
+            // never counted
+            ev("e", Kind::New, now - 60, "started"),
+        ]
+    };
+    let mut d = dash_own();
+    d.inbox.seen = now - 1000;
+    let _ = d.cfg.set("inbox.finished", "none");
+    inbox::set_rows(&mut d, rows());
+    assert_eq!(inbox::unread(&d), 2, "the question and the error");
+    assert_eq!(inbox::unread_for(&d, "b31"), 2);
+    assert_eq!(inbox::unread_for(&d, "gpu2"), 0);
+    assert_eq!(inbox::missed(&d, 10).len(), 2);
+    // listed: counted
+    let _ = d.cfg.set("inbox.finished", "all");
+    inbox::set_rows(&mut d, rows());
+    assert_eq!(inbox::unread(&d), 4);
+    // archived or read: gone from the count
+    d.inbox.dismissed.insert(crate::events::key(&rows()[0]));
+    assert_eq!(inbox::unread(&d), 3);
+    d.inbox.seen = now;
+    assert_eq!(inbox::unread(&d), 0);
+}
+
+#[test]
+fn a_question_the_hub_archived_leaves_a_running_inbox() {
+    use crate::events::{Event, Kind};
+    let now = crate::cache::now();
+    let e = Event {
+        // far enough from any other test's rows in the shared log
+        t: now - 77_777,
+        host: "hub-archive-test".into(),
+        name: "asked".into(),
+        kind: Kind::Blocked,
+        title: "Run tests?".into(),
+        agent: "claude".into(),
+        ..Default::default()
+    };
+    crate::events::append_all(std::slice::from_ref(&e));
+    let mut d = dash_own();
+    inbox::init(&mut d);
+    d.inbox.seen = now - 100_000;
+    assert_eq!(inbox::unread_for(&d, "hub-archive-test"), 1);
+    // another process (the daemon's hub) archives it
+    crate::events::dismiss_keys(&[crate::events::key(&e)]);
+    inbox::look_again(&mut d);
+    d.inbox.seen = now - 100_000;
+    assert_eq!(inbox::unread_for(&d, "hub-archive-test"), 0);
+}
+
+#[test]
+fn a_folder_chosen_in_quick_start_stays_chosen_when_the_machine_answers() {
+    use super::quick::{Place, QuickStart};
+    let d = dash();
+    let ws = || {
+        vec![herdr::Workspace {
+            id: "w1".into(),
+            label: "other-project".into(),
+            number: 1,
+            tabs: 1,
+            focused: true,
+            status: "idle".into(),
+        }]
+    };
+    // chosen before the machine's workspaces arrive: the session would have
+    // opened in the workspace that's open there
+    let mut q = QuickStart::new(&d, "b31").with_folders(&["/work/chosen"]);
+    q.key(k(KeyCode::Enter));
+    q.loaded(Ok(ws()), vec![]);
+    assert_eq!(q.place(), Some(Place::Folder("/work/chosen".into())));
+    // nothing chosen or moved: it starts on the open workspace
+    let mut q = QuickStart::new(&d, "b31").with_folders(&["/work/chosen"]);
+    q.loaded(Ok(ws()), vec![]);
+    assert!(matches!(q.place(), Some(Place::Workspace(_))));
+}
+
+#[test]
+fn t_in_focus_flips_what_is_on_screen_on_the_first_press() {
+    let mut d = dash();
+    let _ = render(&mut d, 200, 40);
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    leave_typing(&mut d);
+    // wide: the timeline shows before any t, so one press hides it
+    let _ = render(&mut d, 200, 40);
+    d.on_key(k(KeyCode::Char('t')));
+    assert_eq!(d.wall.timeline, Some(false));
+    let _ = render(&mut d, 200, 40);
+    d.on_key(k(KeyCode::Char('t')));
+    assert_eq!(d.wall.timeline, Some(true));
+    // narrower: it doesn't show by itself, so one press shows it
+    d.wall.timeline = None;
+    let _ = render(&mut d, 120, 40);
+    d.on_key(k(KeyCode::Char('t')));
+    assert_eq!(d.wall.timeline, Some(true));
+}
+
+#[test]
+fn a_click_on_another_tile_focuses_it_and_the_keys_follow() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let click = |d: &mut Dash, r: ratatui::layout::Rect| {
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            wall::mouse(
+                d,
+                MouseEvent {
+                    kind,
+                    column: r.x + r.width / 2,
+                    row: r.y + r.height / 2,
+                    modifiers: KeyModifiers::NONE,
+                },
+            );
+        }
+    };
+    let keys = || vec!["b31|w1:p1".to_string(), "b31|w1:p2".to_string()];
+    let mut d = dash();
+    let _ = render(&mut d, 160, 40);
+    wall::tile(&mut d, keys(), View::Fleet);
+    let _ = render(&mut d, 160, 40);
+    let places = d.wall.places();
+    let second = places.iter().find(|(k, _)| k.ends_with("p2")).unwrap().1;
+    let first = places.iter().find(|(k, _)| k.ends_with("p1")).unwrap().1;
+    // from Aleph's keys or while typing: one click and the keys are that tile's
+    click(&mut d, second);
+    assert!(d.wall.typing, "the keys follow the click");
+    assert_eq!(d.wall.focused_session(&d).unwrap().pane_id, "w1:p2");
+    click(&mut d, first);
+    assert!(d.wall.typing, "still typing, into the tile clicked");
+    assert_eq!(d.wall.focused_session(&d).unwrap().pane_id, "w1:p1");
+    // never zoomed by a click that only moves focus
+    assert!(d.wall.win().is_some_and(|w| !w.zoom));
+
+    // focus.keys = aleph: Aleph's keys stay until a second click
+    let mut d = dash_own();
+    let _ = d.cfg.set("focus.keys", "aleph");
+    let _ = render(&mut d, 160, 40);
+    wall::tile(&mut d, keys(), View::Fleet);
+    let _ = render(&mut d, 160, 40);
+    let second = d
+        .wall
+        .places()
+        .iter()
+        .find(|(k, _)| k.ends_with("p2"))
+        .unwrap()
+        .1;
+    click(&mut d, second);
+    assert!(!d.wall.typing, "focus moved, the keys are still Aleph's");
+    assert_eq!(d.wall.focused_session(&d).unwrap().pane_id, "w1:p2");
+    click(&mut d, second);
+    assert!(d.wall.typing, "the second click types");
+}
+
+#[test]
+fn cmd_keys_are_never_letters_or_commands() {
+    let cmd = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::SUPER);
+    let mut d = dash();
+    let _ = render(&mut d, 120, 30);
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    leave_typing(&mut d);
+    let windows = d.wall.window_len();
+    // c would have opened a window, x asked to close the session
+    assert!(d.on_key(cmd('c')).is_none());
+    assert!(d.on_key(cmd('x')).is_none());
+    assert_eq!(d.wall.window_len(), windows);
+    assert!(matches!(d.mode, Mode::Normal));
+    assert!(render(&mut d, 120, 30).contains("to copy"));
+}
+
+#[test]
+fn usage_says_how_each_machine_was_read() {
+    use crate::usage::ReadState;
+    let d = dash();
+    let read = |host: &str, at, error: Option<&str>, waiting| ReadState {
+        host: host.into(),
+        at,
+        error: error.map(str::to_string),
+        waiting,
+    };
+    let text = |reads: &[ReadState], w| -> String {
+        super::usage::reads_line(&d.cfg, reads, 10_000, w)
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect()
+    };
+    let t = text(
+        &[
+            read("local", 9_990, None, 0),
+            read(
+                "gpu2",
+                9_990,
+                Some("the log reader failed on 1 of 1 files"),
+                0,
+            ),
+            read("b31", 9_990, None, 39),
+            read("new", 0, None, 0),
+        ],
+        200,
+    );
+    assert!(t.contains("local ✓ 10s"), "{t}");
+    assert!(t.contains("gpu2 ✕ the log reader failed"), "{t}");
+    assert!(t.contains("b31 ⟳ 39 files waiting"), "{t}");
+    assert!(t.contains("new never read"), "{t}");
+    assert!(t.contains("aleph usage sources"), "{t}");
+    // all well: no pointer to the details
+    assert!(!text(&[read("local", 9_990, None, 0)], 200).contains("sources"));
+    // never past the edge
+    assert!(ui::width(&t) > 40 && ui::width(&text(&[read("gpu2", 9_990, Some("x"), 0)], 8)) <= 8);
+}
+
+#[test]
 fn usage_filters_chips_pickers_typed_and_a_calendar() {
     use super::monitor_draw::Sub;
     use super::usage_filters::{Dim, UChip};

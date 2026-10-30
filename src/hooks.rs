@@ -753,9 +753,8 @@ pub fn spool_event(
                 return None
             }
             "Notification" => (Kind::Blocked, s("message"), "needs you"),
-            "Stop" | "SubagentStop" => {
-                (Kind::Done, s("last_assistant_message"), "finished its turn")
-            }
+            // (a subagent's own stop isn't the session's turn ending)
+            "Stop" => (Kind::Done, s("last_assistant_message"), "finished its turn"),
             _ => return None,
         },
         "codex" => match s("type").as_str() {

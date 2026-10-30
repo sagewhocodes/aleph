@@ -719,7 +719,7 @@ impl Dash {
                 }
                 "done" | "idle" if t.from == "working" => {
                     self.rung.remove(&s.key());
-                    self.toast(Level::Ok, format!("✓ {who} finished"));
+                    self.finished_toast(s, who);
                 }
                 _ if t.from.is_empty() => self.toast(Level::Info, format!("+ {who} started")),
                 _ => {
@@ -727,6 +727,37 @@ impl Dash {
                 }
             }
         }
+    }
+
+    /// "finished", unless the agent only woke for a subagent's report with
+    /// others still out. Only Claude Code's logs tell, and they're read off
+    /// this thread, so its toast may come a few seconds later.
+    fn finished_toast(&mut self, s: &Session, who: String) {
+        let may_be_woken = !cfg!(test)
+            && crate::agents::id_of(&s.agent) == "claude"
+            && s.native_id.is_some()
+            && !self.cfg.flag("notify.subagents")
+            && crate::usage::enabled(&self.cfg);
+        if !may_be_woken {
+            self.toast(Level::Ok, format!("✓ {who} finished"));
+            return;
+        }
+        let e = crate::events::Event {
+            t: crate::cache::now(),
+            host: s.host.clone(),
+            name: s.name.clone(),
+            ..Default::default()
+        };
+        let (cfg, tx, s) = (self.cfg.clone(), self.tx.clone(), s.clone());
+        std::thread::spawn(move || {
+            if !crate::turncost::subagent_turn(&cfg, &e, Some(&s)) {
+                let _ = tx.send(Bg::Done {
+                    ok: true,
+                    msg: format!("✓ {who} finished"),
+                    refresh: None,
+                });
+            }
+        });
     }
 
     /// One toast per machine whose herdr version differs from this computer's.
@@ -1353,6 +1384,17 @@ impl Dash {
     }
 
     fn key(&mut self, k: KeyEvent) -> Option<Handoff> {
+        // Cmd + a key is never a command here, and never a letter for the agent
+        // (a terminal that passes Cmd+C on would type a c, or start a window)
+        if k.modifiers.contains(KeyModifiers::SUPER) {
+            if matches!(k.code, KeyCode::Char('c') | KeyCode::Char('C')) {
+                self.toast(
+                    Level::Info,
+                    "to copy: hold shift or option as you drag, then Cmd+C",
+                );
+            }
+            return None;
+        }
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         // (typing into an agent, ctrl+c is the agent's: it interrupts it)
         let typing =
@@ -2667,18 +2709,13 @@ impl Dash {
             if !self.owner.0 {
                 // closes due while nobody runs the hub (`closing.rs`)
                 self.hub.closer.tick(&self.cfg, &self.fleet, false);
+                // and needs-you alerts that have gone stale
+                self.hub.purge_borrowed(&self.cfg, &self.fleet);
             }
             if self.owner.0 {
                 self.hub.tick(&self.cfg, &self.fleet, &tr, &fresh);
                 // no daemon: this dashboard reads the agents' logs now and then
-                let down: Vec<String> = self
-                    .fleet
-                    .hosts
-                    .iter()
-                    .filter(|h| matches!(h.conn, crate::fleet::Conn::Down(_)))
-                    .map(|h| h.alias.clone())
-                    .collect();
-                self.usage.bg.tick(&self.cfg, &down);
+                self.usage.bg.tick(&self.cfg, &self.fleet.unreachable());
             }
             // showcase mode: a supernova where a session finished, a pulsar's
             // flash where a question was answered

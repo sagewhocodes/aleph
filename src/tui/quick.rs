@@ -90,6 +90,12 @@ impl QuickStart {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_folders(mut self, folders: &[&str]) -> QuickStart {
+        self.folders = folders.iter().map(|f| f.to_string()).collect();
+        self
+    }
+
     /// The agent column as shown: every agent (installed first, the
     /// machine's default at the top, a plain shell, then the rest), or
     /// while searching the matches — the ones the machine has first, the
@@ -255,6 +261,8 @@ impl QuickStart {
                 Some(Place::More) => return QuickRes::Start { focus: false },
                 Some(_) => {
                     self.chosen[0] = true;
+                    // chosen: the machine's answer arriving late can't move it
+                    self.moved = true;
                     self.col = 1;
                 }
                 None => {}
@@ -288,7 +296,7 @@ impl QuickStart {
         QuickRes::Keep
     }
 
-    fn place(&self) -> Option<Place> {
+    pub(crate) fn place(&self) -> Option<Place> {
         self.places().get(self.at[0]).cloned()
     }
 

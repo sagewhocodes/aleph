@@ -19,7 +19,7 @@
 
 use super::parse::{hash, parse_ts};
 use super::store;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 
@@ -315,6 +315,59 @@ pub fn of_session(host: &str, session: &str, months_back: usize) -> Vec<Step> {
     v
 }
 
+/// Was the turn that ended by `at_ms` started by a subagent reporting back,
+/// with others still to report? No news then: the last report is. A subagent
+/// whose call ended when it did never reports, so only those still at work
+/// after their call count. Anything unclear answers no: a real end must
+/// never stay quiet.
+pub fn woken_by_subagent(steps: &[Step], at_ms: u64) -> bool {
+    let main = |s: &&Step| s.lane.is_empty() && s.ms <= at_ms;
+    let woken = steps
+        .iter()
+        .filter(main)
+        .filter(|s| s.kind == Kind::Prompt)
+        .max_by_key(|s| s.ms)
+        .is_some_and(|p| p.name == "a");
+    if !woken {
+        return false;
+    }
+    let reports: HashSet<&str> = steps
+        .iter()
+        .filter(main)
+        .filter(|s| s.kind == Kind::Prompt && s.name == "a")
+        .map(|s| s.key.as_str())
+        .collect();
+    let calls: HashSet<&str> = steps
+        .iter()
+        .filter(main)
+        .filter(|s| s.kind == Kind::ToolStart && s.class == "agent")
+        .map(|s| s.key.as_str())
+        .collect();
+    let ended: HashMap<&str, u64> = steps
+        .iter()
+        .filter(main)
+        .filter(|s| s.kind == Kind::ToolEnd)
+        .map(|s| (s.key.as_str(), s.ms))
+        .collect();
+    let mut last: HashMap<&str, u64> = HashMap::new();
+    for s in steps.iter().filter(|s| !s.lane.is_empty()) {
+        let at = last.entry(s.lane.as_str()).or_default();
+        *at = (*at).max(s.ms);
+    }
+    let background: HashSet<&str> = steps
+        .iter()
+        .filter(|s| s.kind == Kind::Lane && calls.contains(s.class.as_str()))
+        .filter(|s| {
+            let worked_until = last.get(s.lane.as_str()).copied().unwrap_or(0);
+            ended
+                .get(s.class.as_str())
+                .is_none_or(|end| worked_until > end + 1000)
+        })
+        .map(|s| s.lane.as_str())
+        .collect();
+    background.len() > reports.len()
+}
+
 /// Drop whole months older than `before` (unix s); the rest is kept.
 pub fn prune(before: u64) -> usize {
     let mut n = 0;
@@ -458,6 +511,85 @@ pub fn parse_words(text: &str, agent: &str) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A session's log as wire lines, each `(tag, seconds, lane, key, name, class)`.
+    fn log(lines: &[(&str, u64, &str, &str, &str, &str)]) -> Vec<Step> {
+        lines
+            .iter()
+            .filter_map(|(tag, at, lane, key, name, class)| {
+                let line = format!("{tag}\t{at}\tsess\t{lane}\t{key}\t{name}\t{class}");
+                from_wire(&line, "b31", "claude")
+            })
+            .collect()
+    }
+
+    const LAUNCH_TWO: &[(&str, u64, &str, &str, &str, &str)] = &[
+        // you ask; the agent starts two subagents in the background and stops
+        ("p", 100, "", "you", "u", ""),
+        ("ks", 101, "", "call-a", "Agent", "agent"),
+        ("ke", 102, "", "call-a", "ok", "0"),
+        ("ks", 103, "", "call-b", "Agent", "agent"),
+        ("ke", 104, "", "call-b", "ok", "0"),
+        ("sl", 0, "lane-a", "call-a", "Explore", ""),
+        ("sl", 0, "lane-b", "call-b", "Explore", ""),
+        ("ks", 150, "lane-a", "a1", "Read", "tool"),
+        ("ks", 160, "lane-b", "b1", "Read", "tool"),
+    ];
+
+    #[test]
+    fn a_turn_woken_by_a_subagent_stays_quiet_until_the_last_report() {
+        let mut v = log(LAUNCH_TWO);
+        // the turn you asked for ends: that's always news
+        assert!(!woken_by_subagent(&v, 110_000));
+        // the first report wakes it, the other still out: quiet
+        v.extend(log(&[("p", 170, "", "report-1", "a", "")]));
+        assert!(woken_by_subagent(&v, 175_000));
+        // the second, the last: this is the session finishing
+        v.extend(log(&[("p", 180, "", "report-2", "a", "")]));
+        assert!(!woken_by_subagent(&v, 185_000));
+        // you ask again, with nothing out: news
+        v.extend(log(&[("p", 200, "", "you-2", "u", "")]));
+        assert!(!woken_by_subagent(&v, 205_000));
+    }
+
+    #[test]
+    fn subagents_that_finished_inside_their_call_never_report() {
+        // the call ran as long as the subagent did: nothing is out afterwards,
+        // so a later wake (a peer's message, say) isn't held back by them
+        let v = log(&[
+            ("p", 100, "", "you", "u", ""),
+            ("ks", 101, "", "call-a", "Agent", "agent"),
+            ("sl", 0, "lane-a", "call-a", "Explore", ""),
+            ("ks", 110, "lane-a", "a1", "Read", "tool"),
+            ("ke", 120, "", "call-a", "ok", "0"),
+            ("p", 130, "", "peer-1", "a", ""),
+        ]);
+        assert!(!woken_by_subagent(&v, 135_000));
+    }
+
+    #[test]
+    fn a_subagents_own_subagent_is_not_waited_for() {
+        // it reports to the subagent that started it, never to the main agent
+        let v = log(&[
+            ("p", 100, "", "you", "u", ""),
+            ("ks", 101, "", "call-a", "Agent", "agent"),
+            ("ke", 102, "", "call-a", "ok", "0"),
+            ("sl", 0, "lane-a", "call-a", "Explore", ""),
+            ("ks", 110, "lane-a", "call-n", "Agent", "agent"),
+            ("sl", 0, "lane-n", "call-n", "Explore", ""),
+            ("ks", 120, "lane-n", "n1", "Read", "tool"),
+            ("p", 130, "", "report-1", "a", ""),
+        ]);
+        assert!(!woken_by_subagent(&v, 135_000));
+    }
+
+    #[test]
+    fn nothing_known_is_never_quiet() {
+        assert!(!woken_by_subagent(&[], 1_000));
+        // only a lane's prompts: the main agent's turn isn't known to be woken
+        let v = log(&[("p", 100, "lane-a", "x", "a", "")]);
+        assert!(!woken_by_subagent(&v, 105_000));
+    }
 
     #[test]
     fn steps_from_the_wire_and_back() {

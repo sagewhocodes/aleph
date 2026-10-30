@@ -518,6 +518,10 @@ fn paint_history(lines: &[Line<'static>], up: usize, buf: &mut Buffer, area: Rec
 pub fn key_bytes(k: &crossterm::event::KeyEvent, app_cursor: bool) -> Option<String> {
     use crossterm::event::{KeyCode, KeyModifiers};
     let m = k.modifiers;
+    // Cmd + a key is the terminal's own: as bytes it would just be the letter
+    if m.contains(KeyModifiers::SUPER) {
+        return None;
+    }
     let (shift, alt, ctrl) = (
         m.contains(KeyModifiers::SHIFT),
         m.contains(KeyModifiers::ALT),
@@ -897,6 +901,11 @@ mod tests {
         let up = KeyEvent::new(C::Up, M::NONE);
         assert_eq!(key_bytes(&up, true).unwrap(), "\x1bOA");
         assert_eq!(key_bytes(&KeyEvent::new(C::F(20), M::NONE), false), None);
+        // Cmd+C is the terminal's: never a c for the agent
+        assert_eq!(
+            key_bytes(&KeyEvent::new(C::Char('c'), M::SUPER), false),
+            None
+        );
     }
 
     #[test]

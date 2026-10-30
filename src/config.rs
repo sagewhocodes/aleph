@@ -489,6 +489,12 @@ pub const KNOWN: &[Known] = &[
         help: "aleph watch: notify when a session needs you",
     },
     Known {
+        key: "notify.subagents",
+        default: "false",
+        kind: Kind::Bool,
+        help: "notify when an agent wakes because a subagent reported back while others still work; off, only the last report counts as the session finishing",
+    },
+    Known {
         key: "notify_done",
         default: "false",
         kind: Kind::Bool,

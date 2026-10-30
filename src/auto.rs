@@ -348,6 +348,20 @@ impl Hub {
         }
     }
 
+    /// `purge`, from a process that doesn't run the hub, while nobody here does
+    /// (the hub on another machine, say): the lock borrowed, so it never runs
+    /// beside a daemon's.
+    pub fn purge_borrowed(&mut self, cfg: &Config, fleet: &Fleet) {
+        let due = self
+            .last_purge
+            .is_none_or(|t| t.elapsed() >= Duration::from_secs(10));
+        if due {
+            if let Some(_lock) = HubLock::try_borrow() {
+                self.purge(cfg, fleet);
+            }
+        }
+    }
+
     /// Needs-you alerts whose session was answered, ended or moved on, and any
     /// older than `inbox.needs_ttl`, go to the archive — for the dashboard,
     /// Raycast, the menu bar and the web console at once — and their desktop

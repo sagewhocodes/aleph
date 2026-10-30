@@ -319,6 +319,20 @@ pub fn key(e: &Event) -> String {
     format!("{}|{}|{}|{}", e.t, e.host, e.name, e.kind.as_str())
 }
 
+/// When the Inbox's files last changed: the log, and its marks (read, archived,
+/// kept). The hub, Raycast or another dashboard moving them shows here.
+pub type Stamp = [Option<std::time::SystemTime>; 4];
+
+pub fn stamp() -> Stamp {
+    let at = |p: PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    [
+        at(file()),
+        at(seen_file()),
+        at(dismissed_file()),
+        at(marks_file()),
+    ]
+}
+
 /// Events up to this time are read.
 pub fn seen() -> u64 {
     std::fs::read_to_string(seen_file())

@@ -404,6 +404,10 @@ pub(crate) struct State {
     pub back: Option<View>,
     /// Focus's timeline (`t`): None = on when the screen is wide
     pub timeline: Option<bool>,
+    /// the width the panes last had, the timeline included (0: not drawn yet)
+    body_w: u16,
+    /// the click that moved focus to a tile: its release isn't the agent's
+    swallow_up: bool,
     /// opened from the approval board to answer: leaving goes back to it
     /// while questions still wait
     pub back_to_board: bool,
@@ -451,6 +455,8 @@ impl State {
             auto_zoom: false,
             back: None,
             timeline: None,
+            body_w: 0,
+            swallow_up: false,
             back_to_board: false,
         }
     }
@@ -1885,14 +1891,23 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
             super::fleet::note_box(d, &s);
         }
         KeyCode::Char('t') if d.wall.in_focus() => {
-            let on = !d.wall.timeline.unwrap_or(false);
+            // it flips what's on screen (a wide screen shows it before any t)
+            let w = d.wall.body_w;
+            let showing = if w > 0 {
+                super::timeline::shown(d, w)
+            } else {
+                d.wall.timeline.unwrap_or(false)
+            };
+            let on = !showing;
             d.wall.timeline = Some(on);
             d.toast(
                 Level::Info,
-                if on {
-                    "timeline shown (t hides it)"
-                } else {
+                if !on {
                     "timeline hidden"
+                } else if w > 0 && !super::timeline::shown(d, w) {
+                    "the timeline needs a wider window (100 columns)"
+                } else {
+                    "timeline shown (t hides it)"
                 },
             );
         }
@@ -2202,6 +2217,12 @@ pub(crate) fn mouse(d: &mut Dash, m: MouseEvent) {
         }
     };
     match m.kind {
+        // the end of the click that moved focus here: never the agent's
+        MouseEventKind::Drag(MouseButton::Left) if d.wall.swallow_up => {}
+        MouseEventKind::Up(_) if d.wall.swallow_up => {
+            d.wall.swallow_up = false;
+            d.wall.drag = None;
+        }
         // the wheel scrolls the pane under it: its history (herdr's), or
         // the agent's own scrolling when it asked for the mouse
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
@@ -2221,6 +2242,7 @@ pub(crate) fn mouse(d: &mut Dash, m: MouseEvent) {
         }
         MouseEventKind::Down(MouseButton::Left) => {
             // a click outside the pane you're typing into stops the typing
+            let was_typing = d.wall.typing;
             if d.wall.typing {
                 let inside = d
                     .wall
@@ -2265,8 +2287,20 @@ pub(crate) fn mouse(d: &mut Dash, m: MouseEvent) {
                 if let Some(w) = d.wall.win_mut() {
                     w.focus = id;
                 }
+                // a click focuses the tile under it, and the keys follow: left
+                // on Aleph's they'd run its commands (x closes, y approves) on
+                // a session you meant to type into. With focus.keys = aleph,
+                // and not typing, a second click starts the typing.
+                let follow = was_typing || d.cfg.get_or("focus.keys") != "aleph";
+                let session = matches!(
+                    d.wall.panes.get(&id).map(|p| &p.content),
+                    Some(Content::Session(_))
+                );
                 if again && !d.wall.typing {
                     run(d, Cmd::Type);
+                } else if !again && follow && session {
+                    d.wall.typing = true;
+                    d.wall.swallow_up = true;
                 }
             }
         }
@@ -2397,6 +2431,7 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
     // (the window's tree, owned: the side panel below may change the dashboard)
     let root = w.root.clone();
     // Focus: the session's timeline at the side, when there's room
+    d.wall.body_w = body.width;
     let body = match d.wall.focused_session(d) {
         Some(s) if d.wall.in_focus() && super::timeline::shown(d, body.width) => {
             let [main, side] = Layout::horizontal([

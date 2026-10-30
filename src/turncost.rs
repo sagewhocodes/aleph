@@ -310,23 +310,7 @@ pub fn for_alert(cfg: &Config, e: &Event, live: Option<&Session>) -> Option<Stri
     if native.is_empty() || !usage::enabled(cfg) || cfg!(test) {
         return None;
     }
-    // a read asked for after the turn ended, done in time and whole: what it
-    // found is that turn's, even inside the same second (`fresh` can't tell)
-    let mut read_after = false;
-    if !fresh(&e.host, e.t) {
-        let (tx, rx) = mpsc::channel();
-        let (c, host) = (cfg.clone(), e.host.clone());
-        // (it finishes even if we stop waiting: the Inbox gets it then)
-        std::thread::spawn(move || {
-            let r = usage::sync(&c, std::slice::from_ref(&host), false, ALERT_WAIT, |_| {});
-            let _ = tx.send(r);
-        });
-        if let Ok(r) = rx.recv_timeout(ALERT_WAIT) {
-            read_after = r
-                .iter()
-                .any(|x| x.host == e.host && x.error.is_none() && x.budget.is_none());
-        }
-    }
+    let read_after = read_after_turn(cfg, e);
     let t = lookup(cfg, e, &native)?;
     if !t.complete && !read_after {
         crate::log::debug(
@@ -339,6 +323,40 @@ pub fn for_alert(cfg: &Config, e: &Event, live: Option<&Session>) -> Option<Stri
         return None;
     }
     Some(line(&t))
+}
+
+/// Has `e`'s machine been read since the turn ended? Asks for it now when not,
+/// waiting [`ALERT_WAIT`] at most. True only for a read asked for after the
+/// turn, done in time and whole: what it found is that turn's, even inside the
+/// same second (`fresh` can't tell).
+fn read_after_turn(cfg: &Config, e: &Event) -> bool {
+    if fresh(&e.host, e.t) {
+        return false;
+    }
+    let (tx, rx) = mpsc::channel();
+    let (c, host) = (cfg.clone(), e.host.clone());
+    // (it finishes even if we stop waiting: the Inbox gets it then)
+    std::thread::spawn(move || {
+        let r = usage::sync(&c, std::slice::from_ref(&host), false, ALERT_WAIT, |_| {});
+        let _ = tx.send(r);
+    });
+    rx.recv_timeout(ALERT_WAIT).is_ok_and(|r| {
+        r.iter()
+            .any(|x| x.host == e.host && x.error.is_none() && x.budget.is_none())
+    })
+}
+
+/// Should this finished turn stay quiet: the agent woke because a subagent
+/// reported back, with others still out (`notify.subagents` turns this off)?
+/// Blocking, like [`for_alert`]. Nothing read in time: it isn't held back.
+pub fn subagent_turn(cfg: &Config, e: &Event, live: Option<&Session>) -> bool {
+    let native = native_of(e, live);
+    if native.is_empty() || cfg.flag("notify.subagents") || !usage::enabled(cfg) || cfg!(test) {
+        return false;
+    }
+    read_after_turn(cfg, e);
+    let steps = usage::steps::of_session(&e.host, &native, 2);
+    usage::steps::woken_by_subagent(&steps, (e.t + 1) * 1000)
 }
 
 /// A finished turn for the desktop banner: its numbers after its words.

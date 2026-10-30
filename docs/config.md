@@ -113,6 +113,7 @@ dashboard's Settings tab edits them. Per-machine settings are `host.<alias>.<key
 | Setting | TOML | Default | What it does |
 |---|---|---|---|
 | `notify` | `notify.desktop` | `true` (on/off) | aleph watch: notify when a session needs you |
+| `notify.subagents` | `notify.subagents` | `false` (on/off) | notify when an agent wakes because a subagent reported back while others still work; off, only the last report counts as the session finishing |
 | `notify_done` | `notify.desktop_done` | `false` (on/off) | desktop notifications for every finished turn, not only the long ones (notify.done_min); never for a session on screen in a dashboard in front of you |
 | `notify.ntfy` | `notify.ntfy` | — | phone notifications: an ntfy topic URL, e.g. https://ntfy.sh/<secret-topic> |
 | `notify.slack` | `notify.slack` | — | a Slack incoming-webhook URL |

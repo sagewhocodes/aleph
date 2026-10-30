@@ -212,8 +212,11 @@ pub(crate) struct State {
     sel: usize,
     scroll: usize,
     loaded: Option<Instant>,
+    /// the Inbox's files as last read, and when they were last looked at
+    stamp: events::Stamp,
+    looked: Option<Instant>,
     /// unix time the inbox was last looked at (persisted)
-    seen: u64,
+    pub(crate) seen: u64,
     pub(crate) show: Show,
     host: Option<String>,
     /// only this agent (`g`)
@@ -225,7 +228,7 @@ pub(crate) struct State {
     merged: Vec<Item>,
     pub searching: bool,
     /// archived event ids (persisted; the API calls them dismissed)
-    dismissed: HashSet<String>,
+    pub(crate) dismissed: HashSet<String>,
     /// archived launches, and what was brought back from the archive (which
     /// the automatic archiving then leaves alone); persisted
     archived: HashSet<String>,
@@ -284,11 +287,32 @@ pub(crate) fn of_session(d: &Dash, host: &str, name: &str) -> Vec<Event> {
 }
 
 pub(crate) fn init(d: &mut Dash) {
+    read_marks(d);
+    apply_settings(d);
+    reload(d);
+}
+
+/// The marks as they are on disk: the hub archives what's answered or expired
+/// there, and Raycast or another dashboard may have moved them too.
+fn read_marks(d: &mut Dash) {
+    d.inbox.stamp = events::stamp();
     d.inbox.seen = events::seen();
     d.inbox.dismissed = events::dismissed();
     (d.inbox.archived, d.inbox.kept) = events::marks();
-    apply_settings(d);
-    reload(d);
+}
+
+/// Pick up what other processes changed: new events from the log, and the
+/// marks, so a question the hub archived leaves the list without a restart.
+pub(crate) fn look_again(d: &mut Dash) {
+    let now = events::stamp();
+    if now == d.inbox.stamp {
+        return;
+    }
+    let log_moved = now[0] != d.inbox.stamp[0];
+    read_marks(d);
+    if log_moved {
+        reload(d);
+    }
 }
 
 /// `inbox.group`, `inbox.hide_ended` and `inbox.auto_archive`, as set now.
@@ -819,56 +843,46 @@ pub(crate) fn for_host(d: &Dash, host: &str, n: usize) -> Vec<Event> {
         .collect()
 }
 
-/// Unseen events from one machine (a dot on its Fleet card).
-pub(crate) fn unread_for(d: &Dash, host: &str) -> usize {
-    d.inbox
-        .rows
-        .iter()
-        .filter(|e| {
-            e.host == host
-                && e.t > d.inbox.seen
-                && matches!(
-                    e.kind,
-                    Kind::Blocked | Kind::Done | Kind::Error | Kind::Limit
-                )
-                && !d.inbox.dismissed.contains(&id(e))
-        })
-        .count()
+/// The alerts that count as new, newest first: unseen, wanting attention, and
+/// really in the list (`inbox.finished` can leave finished turns out, and a run
+/// of identical events is one row). Every count and dot reads this, so none
+/// can promise rows that aren't there.
+fn attention(d: &Dash) -> Vec<&Event> {
+    let mut out = Vec::new();
+    let mut prev: Option<&Event> = None;
+    for it in &d.inbox.merged {
+        let e = &it.e;
+        let repeat = prev.is_some_and(|p| same(p, e));
+        prev = Some(e);
+        if !repeat
+            && it.logged
+            && e.t > d.inbox.seen
+            && matches!(
+                e.kind,
+                Kind::Blocked | Kind::Done | Kind::Error | Kind::Limit
+            )
+            && !d.inbox.dismissed.contains(&id(e))
+        {
+            out.push(e);
+        }
+    }
+    out
 }
 
-/// Unseen events that want attention (for the tab's dot).
+/// New alerts from one machine (a dot on its Fleet card).
+pub(crate) fn unread_for(d: &Dash, host: &str) -> usize {
+    attention(d).iter().filter(|e| e.host == host).count()
+}
+
+/// New alerts (for the tab's dot).
 pub(crate) fn unread(d: &Dash) -> usize {
-    d.inbox
-        .rows
-        .iter()
-        .filter(|e| {
-            e.t > d.inbox.seen
-                && matches!(
-                    e.kind,
-                    Kind::Blocked | Kind::Done | Kind::Error | Kind::Limit
-                )
-                && !d.inbox.dismissed.contains(&id(e))
-        })
-        .count()
+    attention(d).len()
 }
 
 /// The newest `n` alerts that came after the Inbox was last looked at
 /// (ctrl+n's "missed"), newest first.
 pub(crate) fn missed(d: &Dash, n: usize) -> Vec<Event> {
-    d.inbox
-        .rows
-        .iter()
-        .filter(|e| {
-            e.t > d.inbox.seen
-                && matches!(
-                    e.kind,
-                    Kind::Blocked | Kind::Done | Kind::Error | Kind::Limit
-                )
-                && !d.inbox.dismissed.contains(&id(e))
-        })
-        .take(n)
-        .cloned()
-        .collect()
+    attention(d).into_iter().take(n).cloned().collect()
 }
 
 /// Everything up to now counts as read (ctrl+n's `r`).
@@ -892,6 +906,11 @@ fn mark_seen(d: &mut Dash) {
 pub(crate) fn pump(d: &mut Dash) {
     if !matches!(d.inbox.loaded, Some(t) if t >= d.fleet.changed_at) {
         reload(d);
+    }
+    // (not in tests: their dashboards share these files)
+    if !cfg!(test) && d.inbox.looked.is_none_or(|t| t.elapsed().as_secs() >= 2) {
+        d.inbox.looked = Some(Instant::now());
+        look_again(d);
     }
     if d.view == View::Inbox && unread(d) > 0 {
         match d.inbox.opened {
@@ -1205,6 +1224,8 @@ pub(crate) fn click(d: &mut Dash, i: usize, double: bool) -> Option<Handoff> {
 
 /// `x`: into the archive, or (looking at the archive) back out of it.
 fn archive(d: &mut Dash, it: &Item) {
+    // from the files as they are now: what the hub archived meanwhile stays
+    read_marks(d);
     let ids = ids_of(d, it);
     let back = d.inbox.archive_view;
     for i in &ids {
@@ -1224,7 +1245,7 @@ fn archive(d: &mut Dash, it: &Item) {
         }
     }
     // keep the files small: only ids still in the logs matter
-    events::save_dismissed(&d.inbox.dismissed, &d.inbox.rows);
+    events::save_dismissed(&d.inbox.dismissed, &events::load(events::CAP));
     let known: HashSet<String> = d
         .inbox
         .rows
@@ -1940,12 +1961,8 @@ fn draw_filters(d: &mut Dash, f: &mut Frame, r: Rect) {
         let n = shown.iter().filter(|it| s.keeps_item(it)).count();
         // a dot when it holds something unread or live (launches never are)
         let hot = s != Show::Launches
-            && (d.inbox.rows.iter().any(|e| {
-                s.keeps(e.kind)
-                    && kept(d, e)
-                    && e.t > d.inbox.seen
-                    && !d.inbox.dismissed.contains(&id(e))
-            }) || (s != Show::All && lv.iter().any(|i| s.keeps(i.e.kind))));
+            && (attention(d).iter().any(|e| s.keeps(e.kind) && kept(d, e))
+                || (s != Show::All && lv.iter().any(|i| s.keeps(i.e.kind))));
         let st = if on {
             ui::selected().fg(c::ACCENT())
         } else {
@@ -3531,6 +3548,7 @@ pub(crate) fn dismiss(d: &mut Dash, x: Dismiss) {
         reload(d);
         d.note(format!("{} deleted for good", x.what));
     } else {
+        read_marks(d);
         for i in evs {
             d.inbox.kept.remove(&i);
             d.inbox.dismissed.insert(i);
@@ -3539,7 +3557,7 @@ pub(crate) fn dismiss(d: &mut Dash, x: Dismiss) {
             d.inbox.kept.remove(&i);
             d.inbox.archived.insert(i);
         }
-        events::save_dismissed(&d.inbox.dismissed, &d.inbox.rows);
+        events::save_dismissed(&d.inbox.dismissed, &events::load(events::CAP));
         let known: HashSet<String> = d
             .inbox
             .rows

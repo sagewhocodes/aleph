@@ -218,6 +218,10 @@ impl Bridge {
             let (tx, cfg) = (self.tx.clone(), cfg.clone());
             thread::spawn(move || {
                 let line = crate::turncost::for_alert(&cfg, &turn, Some(&s));
+                // only a subagent reporting back, with others still out
+                if crate::turncost::subagent_turn(&cfg, &turn, Some(&s)) {
+                    return;
+                }
                 let m = crate::message::finished_turn(&cfg, &s, took, &said, line);
                 if let Some(tx) = tx {
                     let _ = tx.send(Op::Note(Note {
