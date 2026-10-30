@@ -1425,7 +1425,7 @@ fn send_keys(d: &mut Dash, s: &Session, keys: &[&str]) {
 // ------------------------------------------------------------------ commands
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Cmd {
+pub(crate) enum Cmd {
     SplitSide,
     SplitStack,
     Move(i8, i8),
@@ -1461,7 +1461,68 @@ fn refused(d: &mut Dash) -> bool {
     locked
 }
 
-fn run(d: &mut Dash, cmd: Cmd) {
+/// ctrl+k picked this session, in Focus or Tile: to the pane it's in if it's
+/// in one of your windows, else Focus on it.
+pub(crate) fn jump_to(d: &mut Dash, key: &str) {
+    let found = d.wall.windows.iter().enumerate().find_map(|(i, w)| {
+        w.root
+            .leaves()
+            .into_iter()
+            .find(|id| {
+                d.wall
+                    .panes
+                    .get(id)
+                    .is_some_and(|p| matches!(&p.content, Content::Session(k) if k == key))
+            })
+            .map(|id| (i, id))
+    });
+    if let Some((i, id)) = found {
+        d.wall.cur = i;
+        if let Some(w) = d.wall.win_mut() {
+            w.focus = id;
+        }
+        d.wall.dirty = true;
+        return;
+    }
+    let back = d.wall.back.unwrap_or(View::Fleet);
+    focus_on(d, key, back);
+}
+
+/// ctrl+k picked a window, from any view.
+pub(crate) fn go_to_window(d: &mut Dash, i: usize) {
+    enter(d);
+    if i >= d.wall.windows.len() {
+        return;
+    }
+    if d.view != View::Wall {
+        d.wall.back = Some(d.view);
+    }
+    d.wall.cur = i;
+    d.wall.dirty = true;
+    d.switch(View::Wall);
+}
+
+/// The sessions on a window's panes, by name.
+pub(crate) fn window_names(d: &Dash, i: usize) -> Vec<String> {
+    let Some(w) = d.wall.windows.get(i) else {
+        return vec![];
+    };
+    w.root
+        .leaves()
+        .into_iter()
+        .filter_map(|id| match &d.wall.panes.get(&id)?.content {
+            Content::Session(k) => super::fleet::session(d, k).map(|s| s.display().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Is the window on screen locked?
+pub(crate) fn is_locked(d: &Dash) -> bool {
+    d.wall.win().is_some_and(|w| w.locked)
+}
+
+pub(crate) fn run(d: &mut Dash, cmd: Cmd) {
     let Some(focus) = d.wall.focus() else { return };
     let changes = matches!(
         cmd,

@@ -8,7 +8,7 @@ use super::forms::{Field, Res};
 use super::{Dash, Handoff, Mode, View};
 use crate::ui::{self, c};
 use crate::{fuzzy, history};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use std::time::{Duration, Instant};
@@ -84,6 +84,80 @@ pub(crate) enum Item {
     Undo,
     /// the session journal, this many days back (0: today)
     Journal(i64),
+    /// one of Fleet's commands, on what's selected (or the session in Focus)
+    Act(super::Act),
+    /// one of Focus's and Tile's commands, on the pane you're in
+    Mux(super::wall::Cmd),
+    /// a window of your own, by name
+    Window(usize),
+    /// every key there is
+    Help,
+}
+
+/// Fleet's commands that have a better entry already, or make no sense from here.
+const NOT_LISTED: &[super::Act] = &[
+    super::Act::Up,
+    super::Act::Down,
+    super::Act::Open,
+    super::Act::Collapse,
+    super::Act::Expand,
+    super::Act::Alerts,
+    super::Act::Approvals,
+    super::Act::Hub,
+    super::Act::Refresh,
+];
+
+/// Fleet's commands that only mean something with Fleet on screen.
+const NEED_FLEET: &[super::Act] = &[
+    super::Act::Filter,
+    super::Act::Mark,
+    super::Act::Wall,
+    super::Act::PrevSession,
+    super::Act::NextSession,
+    super::Act::PrevHost,
+    super::Act::NextHost,
+    super::Act::StatsMode,
+    super::Act::Timeline,
+    super::Act::TimelinePanel,
+];
+
+/// Does ctrl+k have an entry of its own for this command (tests)?
+#[cfg(test)]
+pub(crate) fn is_listed(a: super::Act) -> bool {
+    !NOT_LISTED.contains(&a)
+}
+
+/// Focus's and Tile's commands, as ctrl+k lists them there.
+fn mux_commands(locked: bool) -> Vec<(super::wall::Cmd, &'static str, &'static str)> {
+    use super::wall::Cmd;
+    vec![
+        (Cmd::SplitSide, "Split side by side", "v"),
+        (Cmd::SplitStack, "Split stacked", "s"),
+        (Cmd::Next, "Next pane", "o · alt+arrows while typing"),
+        (Cmd::Prev, "Previous pane", ";"),
+        (Cmd::Close, "Close this pane", "x · the session lives on"),
+        (Cmd::Zoom, "Maximise this pane, or go back", "z"),
+        (
+            Cmd::Lock,
+            if locked {
+                "Unlock this layout"
+            } else {
+                "Lock this layout"
+            },
+            "L · nothing splits, closes, swaps or resizes it",
+        ),
+        (Cmd::NextLayout, "Next layout", "space"),
+        (Cmd::SwapNext, "Swap with the next pane", "}"),
+        (Cmd::SwapPrev, "Swap with the previous pane", "{"),
+        (Cmd::Equalize, "Equalise the panes", "="),
+        (Cmd::Numbers, "Show pane numbers", "#"),
+        (Cmd::NewWindow, "New window", "c"),
+        (Cmd::NextWindow, "Next window", "w"),
+        (Cmd::PrevWindow, "Previous window", "W"),
+        (Cmd::Rename, "Rename this window", ","),
+        (Cmd::CloseWindow, "Close this window", "&"),
+        (Cmd::Type, "Type into this pane", "i"),
+    ]
 }
 
 pub(crate) struct Palette {
@@ -92,6 +166,12 @@ pub(crate) struct Palette {
     sel: usize,
     /// its title and what the empty search line says
     words: (&'static str, &'static str),
+    /// choosing what goes in an empty pane: a session goes in it
+    picker: bool,
+    /// ctrl+s: this session goes beside the pane you're in
+    split: bool,
+    /// opened in Focus or Tile
+    in_wall: bool,
 }
 
 /// What a pin is saved as: the machine and the session's name, which outlast
@@ -307,6 +387,9 @@ impl Palette {
             ),
             items,
             sel: 0,
+            picker: false,
+            split: false,
+            in_wall: false,
         }
     }
 
@@ -329,6 +412,7 @@ impl Palette {
             .retain(|(it, _, _, _)| matches!(it, Item::Session(_)));
         // or something new in it, on any machine
         if d.view == View::Wall {
+            p.picker = true;
             p.words = (
                 "What goes in this pane",
                 "a session on any machine, a new agent, a terminal…",
@@ -805,14 +889,59 @@ impl Palette {
                 c::TEAL(),
             ));
         }
+        // your windows, by name, from wherever you are
+        for (i, w) in d.wall.windows.iter().enumerate() {
+            let shown = match w.name.as_str() {
+                super::wall::FOCUS => "Focus".to_string(),
+                super::wall::TILE => "Tile".to_string(),
+                n => n.to_string(),
+            };
+            items.push((
+                Item::Window(i),
+                format!("Window {shown}"),
+                super::wall::window_names(d, i).join(", "),
+                c::BLUE(),
+            ));
+        }
+        // the pane you're in: everything its keys do
+        if d.view == View::Wall {
+            for (cmd, title, key) in mux_commands(super::wall::is_locked(d)) {
+                items.push((Item::Mux(cmd), title.into(), key.into(), c::ACCENT()));
+            }
+        }
+        // every command there is, with the key it has
+        for (a, _, _, help) in super::ACTS {
+            if NOT_LISTED.contains(a) {
+                continue;
+            }
+            let mut title = help.to_string();
+            if let Some(first) = title.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            items.push((
+                Item::Act(*a),
+                title,
+                format!("{} · on the selected session", d.keys.key_for(*a)),
+                c::MUTED(),
+            ));
+        }
+        items.push((
+            Item::Help,
+            "Every key".into(),
+            "? · searchable, by view".into(),
+            c::MUTED(),
+        ));
         Palette {
             q: Field::default(),
             words: (
                 "Go to anything",
-                "sessions, machines, views, @presets, folders…",
+                "sessions, commands, machines, views, @presets, folders…",
             ),
             items,
             sel: 0,
+            picker: false,
+            split: false,
+            in_wall: d.view == View::Wall,
         }
     }
 
@@ -843,6 +972,14 @@ impl Palette {
         match k.code {
             KeyCode::Esc => Res::Cancel,
             KeyCode::Enter => Res::Submit,
+            KeyCode::Char('s')
+                if k.modifiers.contains(KeyModifiers::CONTROL)
+                    && self.in_wall
+                    && matches!(self.chosen(), Some(Item::Session(_))) =>
+            {
+                self.split = true;
+                Res::Submit
+            }
             KeyCode::Down | KeyCode::Tab => {
                 self.sel = (self.sel + 1).min(self.ranked().len().saturating_sub(1));
                 Res::Keep
@@ -858,6 +995,14 @@ impl Palette {
                 Res::Keep
             }
         }
+    }
+
+    /// Is this command listed (tests)?
+    #[cfg(test)]
+    pub(crate) fn has_act(&self, a: super::Act) -> bool {
+        self.items
+            .iter()
+            .any(|x| matches!(x.0, Item::Act(y) if y == a))
     }
 
     /// Put the cursor on a session (tests).
@@ -966,6 +1111,9 @@ impl Palette {
         let mut hints = vec![("↑↓", "pick"), ("enter", "go")];
         if on_session {
             hints.push(("ctrl+p", "pin"));
+            if self.in_wall && !self.picker {
+                hints.push(("ctrl+s", "add as a split"));
+            }
         }
         hints.push(("esc", "close"));
         let foot = Rect {
@@ -979,7 +1127,25 @@ impl Palette {
 
 pub(crate) fn run(d: &mut Dash, p: Palette) -> Option<Handoff> {
     match p.chosen()? {
-        Item::Session(k) if d.view == View::Wall => super::wall::add(d, k),
+        // the picker's pane, or ctrl+s: beside the pane you're in
+        Item::Session(k) if p.picker || p.split => super::wall::add(d, k),
+        // in Focus or Tile a session is somewhere to go
+        Item::Session(k) if d.view == View::Wall => super::wall::jump_to(d, &k),
+        Item::Act(a) => {
+            // in Focus, it acts on the session on screen
+            if d.view == View::Wall {
+                if let Some(s) = super::wall::focused_session(d) {
+                    d.fv.sel = Some(RowId::Sess(s.key()));
+                }
+            }
+            if NEED_FLEET.contains(&a) {
+                d.switch(View::Fleet);
+            }
+            return super::fleet::run_act(d, a);
+        }
+        Item::Mux(cmd) => super::wall::run(d, cmd),
+        Item::Window(i) => super::wall::go_to_window(d, i),
+        Item::Help => d.mode = Mode::Help(super::help::Help::default()),
         Item::TerminalHere(h, dir) => super::quick::shell(d, &h, dir.as_deref()),
         Item::PaneNew => super::wall::new_in_pane(d, None),
         Item::PaneShell(h) => super::wall::new_in_pane(d, Some(h)),

@@ -771,6 +771,95 @@ fn the_palette_finds_a_session_by_machine_and_agent_in_any_order() {
     assert!(s.contains("12 tests passed"), "{s}");
 }
 
+/// Every command is in ctrl+k: Fleet's by what it does, Focus's and Tile's while
+/// you're in one, your windows by name.
+#[test]
+fn every_command_is_in_the_palette() {
+    let mut d = dash();
+    let _ = render(&mut d, 150, 40);
+    let search = |d: &Dash, q: &str| {
+        let mut p = palette::Palette::new(d);
+        for ch in q.chars() {
+            p.key(k(KeyCode::Char(ch)));
+        }
+        p
+    };
+    // every one of Fleet's has its entry, listed under its own words
+    let all = palette::Palette::new(&d);
+    for (a, name, _, _) in super::ACTS {
+        if palette::is_listed(*a) {
+            assert!(all.has_act(*a), "{name} isn't in ctrl+k");
+        }
+    }
+    // and it runs: a note on the selected session
+    let p = search(&d, "a note on the session");
+    assert!(matches!(p.chosen(), Some(palette::Item::Act(Act::Note))));
+    palette::run(&mut d, p);
+    assert!(matches!(d.mode, Mode::Input(_)));
+    d.mode = Mode::Normal;
+    // Focus's commands while you're in it, on the pane you're in
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    leave_typing(&mut d);
+    assert!(!wall::is_locked(&d));
+    let p = search(&d, "lock this layout");
+    assert!(matches!(p.chosen(), Some(palette::Item::Mux(_))));
+    palette::run(&mut d, p);
+    assert!(wall::is_locked(&d));
+    assert!(matches!(
+        search(&d, "unlock this layout").chosen(),
+        Some(palette::Item::Mux(_))
+    ));
+    let p = search(&d, "unlock this layout");
+    palette::run(&mut d, p);
+    // a window by name, from another view
+    d.switch(View::Fleet);
+    let p = search(&d, "window focus");
+    assert!(
+        matches!(p.chosen(), Some(palette::Item::Window(_))),
+        "{:?}",
+        p.chosen()
+    );
+    palette::run(&mut d, p);
+    assert_eq!(d.view, View::Wall);
+}
+
+/// In Focus, picking a session goes to it; ctrl+s adds it beside; the picker
+/// for an empty pane still fills that pane.
+#[test]
+fn in_focus_the_palette_goes_to_a_session_and_ctrl_s_adds_it() {
+    let mut d = dash();
+    let _ = render(&mut d, 150, 40);
+    let panes = |d: &Dash| d.wall.win().map_or(0, |w| w.root.leaves().len());
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    leave_typing(&mut d);
+    let other = d.fleet.host("gpu2").unwrap().sessions[0].key();
+    let open_on = |d: &mut Dash| {
+        let mut p = palette::Palette::new(d);
+        p.select_session(&other);
+        d.mode = Mode::Palette(p);
+    };
+    open_on(&mut d);
+    let s = render(&mut d, 150, 40);
+    assert!(s.contains("add as a split"), "{s}");
+    d.on_key(k(KeyCode::Enter));
+    assert_eq!(panes(&d), 1);
+    assert_eq!(
+        wall::focused_session(&d).map(|s| s.key()),
+        Some(other.clone())
+    );
+    // back to the first, then ctrl+s brings the other in beside it
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    leave_typing(&mut d);
+    open_on(&mut d);
+    d.on_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert_eq!(panes(&d), 2);
+    // a session already in a pane: the cursor goes there, nothing moves
+    let first = "b31|w1:p1".to_string();
+    wall::jump_to(&mut d, &first);
+    assert_eq!(panes(&d), 2);
+    assert_eq!(wall::focused_session(&d).map(|s| s.key()), Some(first));
+}
+
 /// ctrl+p pins a session on top of ctrl+k, three at most, and again unpins it.
 #[test]
 fn the_palette_pins_three_sessions_on_top() {
