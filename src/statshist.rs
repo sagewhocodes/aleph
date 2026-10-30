@@ -3,9 +3,9 @@
 //! wall clock ([`apply`]): a graph holds still until its next bucket closes, and
 //! leaving the view and coming back finds it as it was.
 //!
-//! The daemon always samples, one quiet stream a machine every 30 s ([`Keeper`]),
-//! and appends what it read to `stats/<machine>.jsonl`, which a dashboard reads
-//! into its own rings. So the hours before a dashboard opened are there too, and
+//! The daemon always samples, one quiet stream a machine every 30 s ([`Keeper`]; a
+//! daemon that isn't the hub, only its own machine), and appends what it read to
+//! `stats/<machine>.jsonl`, which a dashboard reads into its own rings. So the hours before a dashboard opened are there too, and
 //! a deploy loses nothing. With no daemon, history starts when the dashboard does.
 
 use crate::config::Config;
@@ -267,13 +267,17 @@ pub fn keep_buckets(cfg: &Config, host: &str) -> usize {
 }
 
 /// The machines with a stream kept for their history: none with `stats = off`, and
-/// never a paused one (Aleph doesn't talk to those) or one keeping nothing.
+/// never a paused one (Aleph doesn't talk to those) or one keeping nothing. A daemon
+/// on a machine that isn't the hub (`hub.machine`) keeps only its own: the hub reads
+/// every machine, and they needn't all read each other as well.
 pub fn wanted(cfg: &Config, hosts: &[String]) -> Vec<String> {
     if cfg.get_or("stats") == "off" {
         return Vec::new();
     }
+    let hub = crate::auto::hub_here(cfg);
     hosts
         .iter()
+        .filter(|h| hub || crate::sshcfg::is_local(h))
         .filter(|h| keep_buckets(cfg, h) > 0)
         .filter(|h| cfg.host_get(h, "paused").is_none_or(|v| v != "true"))
         .cloned()
@@ -768,6 +772,15 @@ mod tests {
         assert_eq!(wanted(&cfg, &hosts), vec!["b31".to_string()]);
         let off = Config::in_memory(&["stats=off"]);
         assert!(wanted(&off, &hosts).is_empty());
+        // not the hub: only itself, however many machines it knows
+        let mine = [crate::sshcfg::LOCAL.to_string(), "b31".to_string()];
+        let other = Config::in_memory(&["hub.machine=some-other-box-xyz"]);
+        assert_eq!(
+            wanted(&other, &mine),
+            vec![crate::sshcfg::LOCAL.to_string()]
+        );
+        let hub = Config::in_memory(&[]);
+        assert_eq!(wanted(&hub, &mine).len(), 2, "the hub reads them all");
     }
 
     #[test]

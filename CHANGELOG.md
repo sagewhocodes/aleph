@@ -50,7 +50,9 @@
 - **The graphs don't redraw any more.** A point appears when its time bucket closes and nothing already drawn moves, and
   leaving Monitor and coming back finds the same graph.
 - **Time nothing was read stays blank,** in charts and sparklines, and averages skip it instead of counting it as zero.
-- This is the one connection Aleph keeps open without a view asking for it: one quiet stream per machine, every 30 s.
+- This is the one connection Aleph keeps open without a view asking for it: one quiet stream per machine, every 30 s, from
+  the hub only. A daemon on another machine keeps its own machine's history and doesn't read the others. `stats = off`, a
+  paused machine and `stats_keep_hours = 0` mean no stream.
 
 ### Keys on the timeline
 - **`G` opens the turn view on Monitor's Timeline too,** as it does everywhere else, and `z` `Z` fold or expand every
