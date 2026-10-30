@@ -2298,6 +2298,10 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
             .map_or(String::new(), |x| x.1.clone());
         let prefix = label.split_once('_').map(|(p, _)| p);
         let sdk = prefix == Some(crate::agentsdk::ID);
+        // an agent like any other, for `agents`: a plain terminal isn't one
+        if sdk && !f.matches(crate::agentsdk::ID) {
+            continue;
+        }
         let ours = sdk || prefix == Some(crate::agents::SHELL);
         let name = names::from_label(&label);
         out.push(Session {
@@ -2766,6 +2770,27 @@ mod tests {
         let codex = parse_sessions(&agents, &tabs, &Filter::Only(vec!["codex"]));
         assert_eq!(codex.len(), 1);
         assert_eq!(codex[0].label, "codex_x");
+    }
+
+    #[test]
+    fn an_agent_sdk_tab_is_its_own_agent_and_follows_the_filter() {
+        let agents = serde_json::json!({"agents": []});
+        let tabs = serde_json::json!({
+            "tabs": [{"tab_id": "w1:t2", "label": "agentsdk_bot:proj"},
+                     {"tab_id": "w1:t3", "label": "shell_dune"}],
+            "panes": [{"pane_id": "w1:p2", "tab_id": "w1:t2", "cwd": "/srv/proj", "revision": 4},
+                      {"pane_id": "w1:p3", "tab_id": "w1:t3", "cwd": "/srv"}],
+        });
+        let all = parse_sessions(&agents, &tabs, &Filter::All);
+        let sdk = all.iter().find(|s| s.pane_id == "w1:p2").unwrap();
+        assert_eq!(sdk.agent, crate::agentsdk::ID);
+        assert_eq!(sdk.name, "bot");
+        assert!(!sdk.plain);
+        assert_eq!(sdk.revision, Some(4));
+        // only the agents you listed; a terminal isn't an agent, and stays
+        let only = parse_sessions(&agents, &tabs, &Filter::Only(vec!["codex"]));
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].pane_id, "w1:p3");
     }
 
     #[test]
