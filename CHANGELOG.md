@@ -2,6 +2,11 @@
 
 ## 2.1.0 — in progress
 
+### The tour
+- **A hands-on tour,** with chapters on Fleet, Focus and splits, the Inbox, Usage and `ctrl+k`. Each step waits for the real
+  key on your real sessions, with reading cards alongside. Only the key it asks for gets through, so nothing starts, closes or
+  is sent while it runs. `ctrl+n` skips a step, `ctrl+x` ends it, and `ctrl+k` plays it again, or any one chapter.
+
 ### ctrl+k
 - **Before you type:** what you pinned, your sessions by machine, a few actions. Type and everything else is there: every
   command, machines, views, pages, presets, folders.

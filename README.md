@@ -100,6 +100,8 @@ aleph doctor                         # check everything
 | `w` · `y` | Tile · approve |
 | `ctrl+a` · `ctrl+k` | Approvals · palette |
 | `ctrl+t` | A terminal in a folder you pick (`launch.<key>` binds your own: a folder, a preset) |
+| `ctrl+p` | The prompt library, by scenario and agent |
+| `G` | The turn view: `z` folds all, `Z` expands all, enter folds one (`t` in Monitor's Timeline) |
 | `ctrl+q` | Keys back to Aleph, then back to Fleet |
 | `[ ]` · `ctrl+[ ]` | Previous / next session, on any machine · machine (or `( )`) |
 | Drag | Select across a pane; copied when you let go (option+drag goes to the agent) |

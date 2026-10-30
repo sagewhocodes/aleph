@@ -355,8 +355,6 @@ pub(crate) enum Mode {
     DismissList(inbox::DismissList),
     /// the `:` command line
     Command(cmdline::CmdLine),
-    /// the tour after setup: which card
-    Tour(usize),
     /// what's new since you last opened Aleph (once after an update)
     News(news::Card),
     /// `W`: the saved workspaces
@@ -503,6 +501,8 @@ pub struct Dash {
     /// a session to select once a poll has seen it (`aleph focus`, Quick
     /// start): (selector, open it in Focus, since)
     pending_focus: Option<(String, bool, Instant)>,
+    /// the tour, while it runs
+    pub(crate) tour: Option<tour::Tour>,
     /// the last line of the screens of sessions with no title (the palette)
     pub(crate) trails: HashMap<String, (Instant, String)>,
     /// sessions on their way: each a row in Fleet (`quick.rs`)
@@ -595,6 +595,7 @@ impl Dash {
             services,
             hints: MoshiSession::new(in_moshi_session()),
             pending_focus: start.focus.clone().map(|q| (q, true, Instant::now())),
+            tour: None,
             trails: HashMap::new(),
             starting: Vec::new(),
             start_gone: Vec::new(),
@@ -622,8 +623,7 @@ impl Dash {
         let v = d.view;
         d.switch(v);
         if start.tour {
-            d.mode = Mode::Tour(0);
-            tour::show(&mut d, 0);
+            tour::start(&mut d, 0, false);
         }
         if let Some(w) = start
             .workspace
@@ -1403,6 +1403,14 @@ impl Dash {
     }
 
     fn key(&mut self, k: KeyEvent) -> Option<Handoff> {
+        // the tour lets through only the key it's asking for
+        if self.tour.is_some() {
+            return tour::on_key(self, k);
+        }
+        self.key_now(k)
+    }
+
+    pub(crate) fn key_now(&mut self, k: KeyEvent) -> Option<Handoff> {
         // Cmd + a key is never a command here, and never a letter for the agent
         // (a terminal that passes Cmd+C on would type a c, or start a window)
         if k.modifiers.contains(KeyModifiers::SUPER) {
@@ -1539,12 +1547,6 @@ impl Dash {
                     forms::Res::Keep => self.mode = Mode::DismissList(dl),
                     forms::Res::Cancel => {}
                     forms::Res::Submit => inbox::confirm_dismiss(self, dl),
-                }
-                return None;
-            }
-            Mode::Tour(i) => {
-                if let Some(n) = tour::key(self, i, k) {
-                    self.mode = Mode::Tour(n);
                 }
                 return None;
             }
@@ -1882,6 +1884,10 @@ impl Dash {
 
     /// A click or a scroll, and what it asks for (past showcase mode's gate).
     fn on_mouse(&mut self, m: MouseEvent) -> Option<Handoff> {
+        // the tour only goes by the keys it asks for
+        if self.tour.is_some() {
+            return None;
+        }
         // showcase: nothing to click while paused
         if crate::showcase::paused() {
             return None;
@@ -2052,7 +2058,6 @@ impl Dash {
             Mode::Command(cl) => cl.draw(self, f, area),
             Mode::CloseList(cl) => cl.draw(self, f, area),
             Mode::DismissList(dl) => dl.draw(self, f, area),
-            Mode::Tour(i) => tour::draw(self, f, area, *i),
             Mode::News(card) => news::draw(f, area, card),
             Mode::Spaces(p) => spaces::draw(f, area, p),
             Mode::Gallery(g) => gallery::draw(f, area, g),
@@ -2066,6 +2071,7 @@ impl Dash {
         // showcase mode: the caption of the view just opened (part of the
         // frame, so the lens sees it too)
         let quiet = !matches!(self.mode, Mode::Normal);
+        tour::draw(self, f, area);
         crate::showcase::overlay(&self.cfg, f.buffer_mut(), area, quiet);
         // the theme's living details (a glitch between views, its ambience
         // in empty space), then its last touches: its frames' arms, its ground

@@ -1878,7 +1878,7 @@ pub(crate) fn keys_back(d: &Dash) -> String {
 
 /// The keys out, typing or not (`focus.exit`): typing, the first gives the keys
 /// back to Aleph; then the next goes from Focus (and Tile) to Fleet.
-fn exit_keys(d: &Dash) -> Vec<String> {
+pub(crate) fn exit_keys(d: &Dash) -> Vec<String> {
     d.cfg
         .get_or("focus.exit")
         .split(',')

@@ -145,6 +145,7 @@ fn dash() -> Dash {
         api: None,
         api_seen: None,
         pending_focus: None,
+        tour: None,
         trails: Default::default(),
         starting: Vec::new(),
         start_gone: Vec::new(),
@@ -2636,32 +2637,150 @@ fn fleet_manages_machines_without_a_hosts_tab() {
     assert!(!d.fleet.host("b31").unwrap().paused);
 }
 
+/// The whole tour with the real keys: each step's key does its real thing,
+/// everything else is held back, and it ends saved as done.
 #[test]
-fn the_tour_shows_one_card_per_tab_then_ends() {
-    let mut d = dash();
-    d.mode = Mode::Tour(0);
-    tour::show(&mut d, 0);
-    let s = render(&mut d, 120, 32);
-    assert!(s.contains("Fleet — every session"), "{s}");
-    // the keys as the keymap has them
-    let new = d.keys.key_for(Act::New);
-    assert!(s.contains(&format!("{new} starts a new session")), "{s}");
-    for (i, v) in [View::Monitor, View::Inbox, View::Settings]
-        .iter()
-        .enumerate()
-    {
-        d.on_key(k(KeyCode::Enter));
-        assert!(matches!(d.mode, Mode::Tour(n) if n == i + 1));
-        assert_eq!(d.view, *v);
-        let _ = render(&mut d, 80, 24);
+fn the_tour_goes_by_the_real_keys_and_lets_nothing_else_through() {
+    let mut d = dash_own();
+    d.fleet.host_mut("b31").unwrap().sessions[0].native_id = Some("conv-t".into());
+    let _ = render(&mut d, 160, 40);
+    let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    let on = |d: &mut Dash, word: &str| {
+        let s = render(d, 160, 40);
+        assert!(s.contains(word), "wanted {word}: {s}");
+    };
+    tour::start(&mut d, 0, false);
+    on(&mut d, "Fleet: every session");
+    on(&mut d, "Tour · Fleet · 1/");
+    // a reading card takes enter, and nothing else does anything
+    let sel = d.fv.sel.clone();
+    for c in ['x', 'n', 'y', 'q', 'Q', 'i', 'D'] {
+        d.on_key(k(KeyCode::Char(c)));
     }
+    assert!(matches!(d.mode, Mode::Normal) && d.fv.sel == sel && d.tour.is_some());
     d.on_key(k(KeyCode::Enter));
+    // j really moves; x still doesn't close anything
+    on(&mut d, "Move down the list");
+    d.on_key(k(KeyCode::Char('x')));
     assert!(matches!(d.mode, Mode::Normal));
+    d.on_key(k(KeyCode::Char('j')));
+    on(&mut d, "next session, on any machine");
+    d.on_key(k(KeyCode::Char(']')));
+    on(&mut d, "This searches by name");
+    d.on_key(k(KeyCode::Char('/')));
+    assert!(d.fv.filtering);
+    // here typing is fine, and esc clears it
+    d.on_key(k(KeyCode::Char('g')));
+    assert_eq!(d.fv.filter, "g");
+    d.on_key(k(KeyCode::Esc));
+    assert!(d.tour.is_some() && d.fv.filter.is_empty());
+    on(&mut d, "Starting things");
+    d.on_key(k(KeyCode::Enter));
+    // Focus: straight to the agent, but the tour holds the keys back
+    on(&mut d, "Focus: one session");
+    d.on_key(k(KeyCode::Enter));
+    fleet::select(&mut d, fleet::RowId::Sess("b31|w1:p1".into()));
+    on(&mut d, "Enter opens the selected session");
+    d.on_key(k(KeyCode::Enter));
+    assert_eq!(d.view, View::Wall);
+    assert!(d.wall.typing);
+    on(&mut d, "gives the keys back");
+    d.on_key(k(KeyCode::Char('a')));
+    assert!(d.wall.typing && d.tour.is_some());
+    d.on_key(ctrl('q'));
+    assert!(!d.wall.typing && d.view == View::Wall);
+    on(&mut d, "shows or hides the timeline");
+    d.on_key(k(KeyCode::Char('t')));
+    on(&mut d, "G opens every prompt");
+    d.on_key(k(KeyCode::Char('G')));
+    assert!(matches!(d.mode, Mode::Turns));
+    d.on_key(k(KeyCode::Char('z')));
+    d.on_key(k(KeyCode::Char('Z')));
+    on(&mut d, "Esc comes back");
+    d.on_key(k(KeyCode::Esc));
+    assert!(matches!(d.mode, Mode::Normal) && d.tour.is_some());
+    let panes = |d: &Dash| d.wall.win().map_or(0, |w| w.root.leaves().len());
+    on(&mut d, "v splits side by side");
+    d.on_key(k(KeyCode::Char('v')));
+    assert_eq!(panes(&d), 2);
+    on(&mut d, "what goes in the new pane");
+    assert!(matches!(d.mode, Mode::Palette(_)));
+    d.on_key(k(KeyCode::Esc));
+    assert!(matches!(d.mode, Mode::Normal) && d.tour.is_some());
+    d.on_key(k(KeyCode::Char('x')));
+    assert_eq!(panes(&d), 1);
+    on(&mut d, "A pane can hold");
+    d.on_key(k(KeyCode::Enter));
+    on(&mut d, "goes back to Fleet");
+    d.on_key(ctrl('q'));
+    assert_eq!(d.view, View::Fleet);
+    // the Inbox and Usage
+    on(&mut d, "3 goes to the Inbox");
+    d.on_key(k(KeyCode::Char('3')));
+    assert_eq!(d.view, View::Inbox);
+    d.on_key(k(KeyCode::Enter));
+    on(&mut d, "2 goes to Monitor");
+    d.on_key(k(KeyCode::Char('2')));
+    assert_eq!(d.view, View::Monitor);
+    d.on_key(k(KeyCode::Char('u')));
+    assert_eq!(d.mon.sub, monitor_draw::Sub::Usage);
+    on(&mut d, "tokens, time and cost");
+    d.on_key(k(KeyCode::Enter));
+    // ctrl+k: its enter can't run anything
+    on(&mut d, "ctrl+k lists your sessions");
+    d.on_key(ctrl('k'));
+    assert!(matches!(d.mode, Mode::Palette(_)));
+    d.on_key(k(KeyCode::Char('g')));
+    d.on_key(k(KeyCode::Enter));
+    assert!(matches!(d.mode, Mode::Palette(_)));
+    d.on_key(k(KeyCode::Esc));
+    assert!(matches!(d.mode, Mode::Normal));
+    d.on_key(ctrl('p'));
+    assert!(matches!(d.mode, Mode::Prompts(_)));
+    d.on_key(k(KeyCode::Esc));
+    on(&mut d, "Worth knowing");
+    d.on_key(k(KeyCode::Enter));
+    // done, and saved
+    assert!(d.tour.is_none());
     assert_eq!(d.view, View::Fleet);
     assert_eq!(d.cfg.get("tour").as_deref(), Some("done"));
     // small terminals don't break it
-    d.mode = Mode::Tour(2);
+    tour::start(&mut d, 0, false);
     let _ = render(&mut d, 20, 5);
+}
+
+/// With no sessions the steps that need one are skipped; ctrl+n skips, esc ends;
+/// ctrl+k replays one chapter, and no more than that.
+#[test]
+fn the_tour_skips_what_cant_apply_and_replays_a_chapter() {
+    let mut d = dash_own();
+    let _ = render(&mut d, 160, 40);
+    let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    for h in ["b31", "gpu2"] {
+        d.fleet.host_mut(h).unwrap().sessions.clear();
+    }
+    tour::start(&mut d, 0, false);
+    d.on_key(k(KeyCode::Enter));
+    let s = render(&mut d, 160, 40);
+    assert!(s.contains("This searches by name"), "{s}");
+    d.on_key(ctrl('n'));
+    assert!(d.tour.is_some());
+    d.on_key(ctrl('x'));
+    assert!(d.tour.is_none());
+    assert_eq!(d.cfg.get("tour").as_deref(), Some("done"));
+    // one chapter from ctrl+k: Inbox, then it stops
+    let mut p = palette::Palette::new(&d);
+    for c in "tour inbox".chars() {
+        p.key(k(KeyCode::Char(c)));
+    }
+    assert!(matches!(p.chosen(), Some(palette::Item::Tour(Some(_)))));
+    palette::run(&mut d, p);
+    let s = render(&mut d, 160, 40);
+    assert!(s.contains("3 goes to the Inbox"), "{s}");
+    d.on_key(k(KeyCode::Char('3')));
+    d.on_key(k(KeyCode::Enter));
+    assert!(d.tour.is_none());
+    assert_eq!(d.view, View::Fleet);
 }
 
 /// Every cell that paints a background has ink of its own: the terminal's
@@ -2697,9 +2816,9 @@ fn painted_backgrounds_have_ink() {
     check(&mut d, "close list");
     d.mode = Mode::Help(help::Help::default());
     check(&mut d, "help");
-    d.mode = Mode::Tour(0);
-    tour::show(&mut d, 0);
+    tour::start(&mut d, 0, false);
     check(&mut d, "tour");
+    d.tour = None;
     assert!(bad.is_empty(), "{bad:#?}");
 }
 

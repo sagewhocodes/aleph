@@ -96,6 +96,8 @@ pub(crate) enum Item {
     Window(usize),
     /// every key there is
     Help,
+    /// the tour: all of it, or one chapter
+    Tour(Option<usize>),
 }
 
 /// Fleet's commands that have a better entry already, or make no sense from here.
@@ -1055,6 +1057,20 @@ impl Palette {
             "? · searchable, by view".into(),
             c::MUTED(),
         ));
+        items.push((
+            Item::Tour(None),
+            "Take the tour".into(),
+            "with the real keys: nothing starts, closes or gets sent".into(),
+            c::ACCENT(),
+        ));
+        for (i, name) in super::tour::chapters().into_iter().enumerate() {
+            items.push((
+                Item::Tour(Some(i)),
+                format!("Tour: {name}"),
+                "that chapter again".into(),
+                c::ACCENT(),
+            ));
+        }
         // with nothing typed: what you pinned, your sessions, a few actions
         let here_host =
             d.fv.selected_host(d)
@@ -1223,10 +1239,11 @@ impl Palette {
             .filter_map(|(i, it)| {
                 let hay = format!("{} {}", it.1, it.2);
                 // about the same match: the session, ahead of an action naming it
-                let lead = if matches!(it.0, Item::Session(_)) {
-                    SESSION_LEAD
-                } else {
-                    0
+                // (and a tour's chapter behind the thing it's about)
+                let lead = match it.0 {
+                    Item::Session(_) => SESSION_LEAD,
+                    Item::Tour(_) => -SESSION_LEAD,
+                    _ => 0,
                 };
                 word_match(q, &hay).map(|(s, pos)| (s + lead, i, pos))
             })
@@ -1492,6 +1509,8 @@ pub(crate) fn run(d: &mut Dash, p: Palette) -> Option<Handoff> {
         Item::Mux(cmd) => super::wall::run(d, cmd),
         Item::Window(i) => super::wall::go_to_window(d, i),
         Item::Help => d.mode = Mode::Help(super::help::Help::default()),
+        Item::Tour(None) => super::tour::start(d, 0, false),
+        Item::Tour(Some(i)) => super::tour::start(d, i, true),
         Item::TerminalHere(h, dir) => super::quick::shell(d, &h, dir.as_deref()),
         Item::PaneNew => super::wall::new_in_pane(d, None),
         Item::PaneShell(h) => super::wall::new_in_pane(d, Some(h)),

@@ -10,6 +10,27 @@
 # only a build with that feature carries them.
 
 [[entry]]
+id = "2.1.0-ctrlk"
+date = "2026-10-31"
+title = "ctrl+k rebuilt, a prompt library, a turn view, a tour"
+notes = [
+  "ctrl+k shows what you pinned, your sessions by machine and a few actions. Everything else, every command included, comes when you type. Words match in any order.",
+  "A session whose only name is a tab number now goes by its folder, everywhere.",
+  "ctrl+p opens the prompt library: by scenario and agent, to use, edit or add to.",
+  "When an agent or terminal exits, its window closes and you go back. No more empty pane.",
+  "The turn view: t in Monitor's Timeline, G in Focus, G again in Fleet. z folds all, Z expands all, enter folds one. Compactions show on the timeline.",
+  "A tour you do with the real keys, where nothing starts, closes or gets sent. ctrl+k plays it again.",
+]
+commits = [
+  "ctrl+k rebuilt: sessions by machine, one aligned line each; proper names",
+  "Every command is in ctrl+k, windows by name, and Focus jumps to a session",
+  "The prompt library: scenarios, agents, its own screen",
+  "Exiting closes the window and goes back, never an empty pane",
+  "A turn view with fold all and expand all; compactions on the timeline",
+  "A hands-on tour with the real keys",
+]
+
+[[entry]]
 id = "2.1.0-launch"
 date = "2026-10-31"
 title = "Starting things: one flow, an instant row"
