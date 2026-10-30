@@ -145,6 +145,18 @@ TXT
     W=220 H=64
     if [ "$3" = control ]; then W=$(opt --cols "$@"); H=$(opt --rows "$@"); fi
     echo "SESSION $3 $4 ${W}x${H}" >> "$ST/log"
+    # a pane has one controller. $ST/held_<pane> (: as _): another holds it, and
+    # only --takeover gets it; $ST/kick_<pane>: this one has it taken away
+    safe=$(printf '%s' "$4" | tr -c 'A-Za-z0-9' '_')
+    if [ "$3" = control ]; then
+      case " $* " in
+        *" --takeover "*) rm -f "$ST/held_$safe"; echo "TAKEOVER $4" >> "$ST/log";;
+        *) if [ -f "$ST/held_$safe" ]; then
+             printf '{"type":"terminal.closed","reason":"terminal attach failed: terminal x already has an attached client; retry with --takeover"}\n'
+             exit 0
+           fi;;
+      esac
+    fi
     # what a controller sends (keys, pastes, the wheel, clicks): one line each in the log
     # (a background job's stdin is /dev/null: the controller's pipe goes by fd 3)
     if [ "$3" = control ]; then exec 3<&0; ( while IFS= read -r l <&3; do echo "CONTROL $4 $l" >> "$ST/log"; done ) & fi
@@ -160,6 +172,14 @@ TXT
     else
       frame 2 '\033[2J\033[H\033[38;2;217;119;87m✻\033[0m Welcome back — pane '"$4"' on '"$host"'\r\n\r\n> fix the flaky tests\r\n\r\n⏺ 41 passed, 1 failed\r\n\r\n\033[38;2;217;119;87m✻ Thinking…\033[0m'"$foot"
     fi
-    sleep 3600;;
+    i=0
+    while [ "$i" -lt 3600 ]; do
+      sleep 1; i=$((i + 1))
+      if [ "$3" = control ] && [ -f "$ST/kick_$safe" ]; then
+        rm -f "$ST/kick_$safe"; : > "$ST/held_$safe"
+        printf '{"type":"terminal.closed","reason":"terminal attach taken over"}\n'
+        exit 0
+      fi
+    done;;
   *) echo '{"result":{}}';;
 esac

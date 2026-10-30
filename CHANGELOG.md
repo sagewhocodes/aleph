@@ -2,6 +2,13 @@
 
 ## 2.1.0 — in progress
 
+### Two windows on one session
+- **The window you're using gets the pane.** herdr gives a pane one controller and one size, so a second Aleph window
+  opening a session the first still held showed it clipped on the right with empty space below, and it stayed like that.
+  Now opening it takes it over and it fills the window. The other window shows "view only", and takes the pane back when
+  you press a key, click, or switch to that window.
+- A tile resized quickly can no longer lose its own pane to the stream it just replaced.
+
 ### The tour
 - **A hands-on tour,** with chapters on Fleet, Focus and splits, the Inbox, Usage and `ctrl+k`. Each step waits for the real
   key on your real sessions, with reading cards alongside. Only the key it asks for gets through, so nothing starts, closes or

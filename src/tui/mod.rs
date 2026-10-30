@@ -1304,6 +1304,7 @@ impl Dash {
 
     /// A key, and what it asks for (past showcase mode's gate).
     fn on_key(&mut self, k: KeyEvent) -> Option<Handoff> {
+        wall::take_back(self);
         // showcase: the panic key pauses (and resumes) every window, before
         // anything else sees it; while paused no other key does anything
         if crate::showcase::panic_key(&key_str(&k)) {
@@ -1884,6 +1885,9 @@ impl Dash {
 
     /// A click or a scroll, and what it asks for (past showcase mode's gate).
     fn on_mouse(&mut self, m: MouseEvent) -> Option<Handoff> {
+        if !matches!(m.kind, MouseEventKind::Moved) {
+            wall::take_back(self);
+        }
         // the tour only goes by the keys it asks for
         if self.tour.is_some() {
             return None;
@@ -2850,6 +2854,7 @@ impl Dash {
                     Event::Mouse(m) => self.on_mouse(m),
                     Event::FocusGained => {
                         self.focused = true;
+                        wall::take_back(self);
                         None
                     }
                     Event::FocusLost => {

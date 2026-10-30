@@ -1362,6 +1362,15 @@ pub(crate) fn shown(d: &Dash) -> Vec<Session> {
 }
 
 /// The focused pane's live stream.
+/// You're using this window: the panes it shows come here, whoever had them.
+pub(crate) fn take_back(d: &Dash) {
+    for p in d.wall.panes.values() {
+        if let Some(s) = &p.stream {
+            s.take_back();
+        }
+    }
+}
+
 fn focused_stream(d: &Dash) -> Option<&Stream> {
     d.wall
         .focus()
@@ -3309,8 +3318,13 @@ fn draw_session(
         .border_style(border);
     let stream = d.wall.panes.get(&id).and_then(|p| p.stream.as_ref());
     let sstate = stream.map(Stream::state);
+    let view_only = stream.is_some_and(Stream::view_only);
     let (live, lcol) = match &sstate {
         None => ("○ paused".to_string(), c::FAINT()),
+        _ if view_only => (
+            "◑ view only · another window has it · a key takes it back".to_string(),
+            c::YELLOW(),
+        ),
         Some(x) if x.closed => ("■ ended".to_string(), c::FAINT()),
         Some(x) if x.polling => ("◌ polling".to_string(), c::YELLOW()),
         Some(x) if x.connected => ("● live".to_string(), c::GREEN()),

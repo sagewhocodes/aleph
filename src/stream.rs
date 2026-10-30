@@ -36,6 +36,7 @@ use ratatui::text::Line;
 use serde_json::json;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -119,6 +120,10 @@ pub struct Stream {
     child: Arc<Mutex<Option<Child>>>,
     stop: Arc<Mutex<bool>>,
     back: Arc<Mutex<Back>>,
+    /// you're using this window: take the pane from whoever has it
+    reclaim: Arc<AtomicBool>,
+    /// when it last asked to (a herdr that refuses isn't asked on every key)
+    reclaimed: Mutex<Option<Instant>>,
     /// what's on screen, kept still while a selection is dragged across it
     held: Mutex<Option<vt100::Screen>>,
 }
@@ -163,15 +168,17 @@ impl Stream {
         let state = Arc::new(Mutex::new(State::default()));
         let child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
         let stop = Arc::new(Mutex::new(false));
-        let (t2, p2, pa, st, ch, sp) = (
+        let reclaim = Arc::new(AtomicBool::new(false));
+        let (t2, p2, pa, st, ch, sp, re) = (
             t.clone(),
             pane.to_string(),
             parser.clone(),
             state.clone(),
             child.clone(),
             stop.clone(),
+            reclaim.clone(),
         );
-        thread::spawn(move || run(t2, p2, pa, st, ch, sp, size));
+        thread::spawn(move || run(t2, p2, pa, st, ch, sp, re, size));
         Stream {
             host: t.ssh.clone(),
             pane: pane.into(),
@@ -182,6 +189,8 @@ impl Stream {
             child,
             stop,
             back: Arc::new(Mutex::new(Back::default())),
+            reclaim,
+            reclaimed: Mutex::new(None),
             held: Mutex::new(None),
         }
     }
@@ -205,6 +214,8 @@ impl Stream {
             child: Arc::new(Mutex::new(None)),
             stop: Arc::new(Mutex::new(true)),
             back: Arc::new(Mutex::new(Back::default())),
+            reclaim: Arc::new(AtomicBool::new(false)),
+            reclaimed: Mutex::new(None),
             held: Mutex::new(None),
         }
     }
@@ -280,6 +291,30 @@ impl Stream {
     pub fn writable(&self) -> bool {
         let s = self.state();
         s.fitted && s.connected && !s.closed && !s.polling
+    }
+
+    /// It wants the pane and another window has it: watching, at the other's size.
+    pub fn view_only(&self) -> bool {
+        let s = self.state();
+        self.size.is_some() && !s.fitted && s.connected && !s.closed && !s.polling
+    }
+
+    /// You're using this window, so the pane comes here. Only ever on your say,
+    /// or two windows would take it from each other for good.
+    pub fn take_back(&self) {
+        if !self.view_only() {
+            return;
+        }
+        let mut last = self.reclaimed.lock().unwrap();
+        if last.is_some_and(|t| t.elapsed() < RECLAIM_EVERY) {
+            return;
+        }
+        *last = Some(Instant::now());
+        self.reclaim.store(true, Ordering::SeqCst);
+        // ends the watching, so the stream comes round at once
+        if let Some(c) = self.child.lock().unwrap().as_mut() {
+            let _ = c.kill();
+        }
     }
 
     /// One JSON command on the control stream's stdin; false when there's
@@ -734,6 +769,64 @@ pub fn b64(s: &str) -> Vec<u8> {
     out
 }
 
+/// How often a watching stream tries for control when nothing asks it to.
+const REFIT_EVERY: Duration = Duration::from_secs(30);
+/// How often your keys can ask for the pane back.
+const RECLAIM_EVERY: Duration = Duration::from_secs(2);
+
+/// Whether a stream asks herdr for control of its pane, and how. herdr gives a
+/// pane one controller and one size, so a window showing a pane another holds
+/// would draw it at the other's size. A stream opened here takes the pane
+/// (`--takeover`), as does one coming back from a dropped connection, whose old
+/// self may still hold it. One that had it taken watches until you use its window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Hold {
+    want: Option<(u16, u16)>,
+    /// what this run asks for (None: only to watch)
+    fit: Option<(u16, u16)>,
+    takeover: bool,
+    /// watching because control was refused: when to try again
+    refit_at: Option<Instant>,
+}
+
+impl Hold {
+    fn new(want: Option<(u16, u16)>) -> Hold {
+        Hold {
+            want,
+            fit: want,
+            takeover: true,
+            refit_at: None,
+        }
+    }
+    fn before_run(&mut self, now: Instant, reclaim: bool) {
+        if reclaim {
+            self.fit = self.want;
+            self.takeover = true;
+            self.refit_at = None;
+        } else if self.fit.is_none() && self.refit_at.is_some_and(|t| now >= t) {
+            self.fit = self.want;
+            self.refit_at = None;
+        }
+    }
+    /// After a run: true to go straight round again (it's watching now).
+    fn after_run(&mut self, now: Instant, got_frames: bool, err: Option<&str>) -> bool {
+        if self.fit.is_none() {
+            return false;
+        }
+        let taken = err.is_some_and(|e| e.contains("taken over"));
+        if !taken && got_frames {
+            return false;
+        }
+        // taken from us, or refused (held, or a herdr without --takeover): only
+        // watch for now, and later ask without taking it from anyone
+        self.takeover = false;
+        self.fit = None;
+        self.refit_at = Some(now + REFIT_EVERY);
+        true
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run(
     t: Target,
     pane: String,
@@ -741,6 +834,7 @@ fn run(
     state: Arc<Mutex<State>>,
     child: Arc<Mutex<Option<Child>>>,
     stop: Arc<Mutex<bool>>,
+    reclaim: Arc<AtomicBool>,
     size: Option<(u16, u16)>,
 ) {
     let stopped = || *stop.lock().unwrap();
@@ -755,29 +849,37 @@ fn run(
         thread::sleep(Duration::from_millis(250));
     }
     let mut attempts = 0u32;
-    let mut fit = size;
-    // observing because control was refused: when to try control again
-    let mut refit_at: Option<Instant> = None;
+    let mut hold = Hold::new(size);
     loop {
         if stopped() {
             return;
         }
-        if fit.is_none() && refit_at.is_some_and(|t| Instant::now() >= t) {
-            fit = size;
-            refit_at = None;
-        }
+        hold.before_run(Instant::now(), reclaim.swap(false, Ordering::SeqCst));
         let before = state.lock().unwrap().frames;
-        state.lock().unwrap().fitted = fit.is_some();
-        let r = observe(&t, &pane, &parser, &state, &child, &stop, fit);
+        state.lock().unwrap().fitted = hold.fit.is_some();
+        let r = observe(
+            &t,
+            &pane,
+            &parser,
+            &state,
+            &child,
+            &stop,
+            hold.fit,
+            hold.takeover,
+        );
         if stopped() {
             return;
         }
+        // you asked for the pane back: this run was only ended to come round
+        if reclaim.load(Ordering::SeqCst) {
+            continue;
+        }
         let frames = state.lock().unwrap().frames;
-        // control refused (someone holds the pane) or unsupported: observe for
-        // now, and try control again in a while (the holder may detach)
-        if fit.is_some() && frames == before {
-            fit = None;
-            refit_at = Some(Instant::now() + Duration::from_secs(30));
+        if hold.after_run(
+            Instant::now(),
+            frames > before,
+            r.as_ref().err().map(String::as_str),
+        ) {
             state.lock().unwrap().fitted = false;
             continue;
         }
@@ -854,6 +956,24 @@ fn show(
     true
 }
 
+/// `terminal session …` for a run: control at the tile's size, or only watching.
+fn session_args(pane: &str, fit: Option<(u16, u16)>, takeover: bool) -> String {
+    let (verb, cols, rows) = match fit {
+        Some((c, r)) => ("control", c.max(20), r.max(5)),
+        None => ("observe", COLS, ROWS),
+    };
+    let take = if takeover && fit.is_some() {
+        " --takeover"
+    } else {
+        ""
+    };
+    format!(
+        "terminal session {verb} {} --cols {cols} --rows {rows}{take}",
+        sh_quote(pane)
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn observe(
     t: &Target,
     pane: &str,
@@ -862,17 +982,14 @@ fn observe(
     child: &Arc<Mutex<Option<Child>>>,
     stop: &Arc<Mutex<bool>>,
     fit: Option<(u16, u16)>,
+    takeover: bool,
 ) -> Result<(), String> {
     let herdr = chan::herdr_path(&t.ssh);
-    let (verb, cols, rows) = match fit {
-        Some((c, r)) => ("control", c.max(20), r.max(5)),
-        None => ("observe", COLS, ROWS),
-    };
     let script = format!(
-        "{PATH_PRELUDE}; {}exec {} terminal session {verb} {} --cols {cols} --rows {rows}\n",
+        "{PATH_PRELUDE}; {}exec {} {}\n",
         chan::herdr_env(&t.ssh),
         sh_quote(&herdr),
-        sh_quote(pane)
+        session_args(pane, fit, takeover)
     );
     let mut c = sshcfg::shell(&t.ssh, "sh -s")
         .stdin(Stdio::piped())
@@ -1119,5 +1236,83 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 10, 4));
         paint(p.screen(), &mut buf, Rect::new(0, 0, 10, 4));
         assert_eq!(buf[(0, 1)].fg, Color::Indexed(1));
+    }
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+
+    const TILE: Option<(u16, u16)> = Some((120, 40));
+
+    #[test]
+    fn a_stream_opened_here_takes_the_pane() {
+        let h = Hold::new(TILE);
+        assert_eq!((h.fit, h.takeover), (TILE, true));
+        let args = session_args("w1:p1", h.fit, h.takeover);
+        assert!(
+            args.contains("control") && args.ends_with("--cols 120 --rows 40 --takeover"),
+            "{args}"
+        );
+        // only watching: no size of its own, nothing taken
+        let args = session_args("w1:p1", None, true);
+        assert!(
+            args.contains("observe") && !args.contains("--takeover"),
+            "{args}"
+        );
+    }
+
+    #[test]
+    fn a_stream_it_was_taken_from_only_watches_until_you_use_its_window() {
+        let now = Instant::now();
+        let mut h = Hold::new(TILE);
+        // it had frames, then another window took the pane
+        assert!(h.after_run(now, true, Some("terminal attach taken over")));
+        assert_eq!((h.fit, h.takeover), (None, false));
+        // nothing happens by itself, however often it comes round…
+        h.before_run(now, false);
+        assert_eq!(h.fit, None);
+        // …and when it asks again later, it takes nothing from anyone
+        h.before_run(now + REFIT_EVERY, false);
+        assert_eq!((h.fit, h.takeover), (TILE, false));
+        assert!(!session_args("p", h.fit, h.takeover).contains("--takeover"));
+        // still held: back to watching
+        assert!(h.after_run(
+            now + REFIT_EVERY,
+            false,
+            Some("already has an attached client")
+        ));
+        assert_eq!(h.fit, None);
+        // you press a key there
+        h.before_run(now + REFIT_EVERY, true);
+        assert_eq!((h.fit, h.takeover), (TILE, true));
+    }
+
+    #[test]
+    fn a_dropped_connection_comes_back_in_control() {
+        let now = Instant::now();
+        let mut h = Hold::new(TILE);
+        // ssh went away after a healthy run: its old self may still hold the pane
+        assert!(!h.after_run(now, true, Some("ssh dropped")));
+        assert_eq!((h.fit, h.takeover), (TILE, true));
+    }
+
+    #[test]
+    fn a_herdr_that_refuses_takeover_is_asked_plainly_next_time() {
+        let now = Instant::now();
+        let mut h = Hold::new(TILE);
+        assert!(h.after_run(now, false, Some("unexpected argument --takeover")));
+        h.before_run(now + REFIT_EVERY, false);
+        assert_eq!((h.fit, h.takeover), (TILE, false));
+    }
+
+    #[test]
+    fn a_stream_that_never_wanted_the_pane_stays_watching() {
+        let now = Instant::now();
+        let mut h = Hold::new(None);
+        assert!(!h.after_run(now, false, Some("x")));
+        h.before_run(now + REFIT_EVERY, true);
+        assert_eq!(h.fit, None);
+        assert_eq!(h.want, None);
     }
 }
