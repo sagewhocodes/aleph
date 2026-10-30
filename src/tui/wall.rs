@@ -1833,6 +1833,11 @@ pub(crate) fn exit(d: &mut Dash) {
     }
 }
 
+/// The session in the focused pane.
+pub(crate) fn focused_session(d: &Dash) -> Option<Session> {
+    d.wall.focus().and_then(|id| session_of(d, id))
+}
+
 /// `I` in Fleet: Focus on a session, typing into it at once.
 pub(crate) fn type_into(d: &mut Dash, key: &str, back: View) {
     focus_on(d, key, back);
@@ -2124,6 +2129,12 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
             }
         }
         KeyCode::Char('I') => run(d, Cmd::Type),
+        // a terminal in this session's folder (the same keys as Fleet)
+        KeyCode::Char('!') => {
+            let s = sess?;
+            let dir = Some(s.cwd.as_str()).filter(|c| c.starts_with('/'));
+            super::quick::shell(d, &s.host, dir);
+        }
         KeyCode::Char('Q') => {
             let s = sess?;
             if crate::queue::for_session(&s.host, &s.name).is_empty() {
@@ -2906,6 +2917,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
             ("{ }", "needs you"),
             ("O", "new tab"),
             ("a", "attach"),
+            ("!", "terminal"),
             ("| _", "split"),
             ("Q", "queue"),
             ("esc", "back"),
@@ -2918,6 +2930,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
             ("Q", "queue"),
             ("a", "attach"),
             ("O", "new tab"),
+            ("!", "terminal"),
             ("X", "close"),
             ("v s", "split"),
             ("z", "maximise"),
@@ -3695,6 +3708,10 @@ pub(crate) fn cheatsheet(d: &Dash, f: &mut Frame, area: Rect) {
         row("b", "broadcast to this window"),
         row("a · A", "attach in herdr · straight to the agent"),
         row("O", "herdr in a new terminal tab (Aleph stays)"),
+        row(
+            "!",
+            "a terminal in this session's folder (the one already there, if any)",
+        ),
         row("T", "push to herdr: real panes, as here"),
     ];
     let right = vec![

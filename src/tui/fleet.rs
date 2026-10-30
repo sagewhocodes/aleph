@@ -1149,6 +1149,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
             ("x", "close"),
             ("s", "prompt"),
             ("n", "new"),
+            ("!", "terminal"),
             ("space", "mark"),
             ("w", "tile"),
             (

@@ -27,6 +27,7 @@
 - **Each machine has a standing terminal.** `!` on a machine's row opens it, making it the first time; `!` on a session
   opens the terminal already in that folder if there is one. `shell.ready = startup` makes each machine's as soon as it
   answers.
+- `!` works in Focus and Tile too, and shows in their hints, Fleet's and `ctrl+k`.
 - A pane herdr couldn't bring back after a restart says why on its row.
 - `ctrl+q` in Fleet no longer quits Aleph: one press too many while backing out of Focus would have closed it. Plain `q`
   still does.

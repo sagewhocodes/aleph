@@ -14,6 +14,8 @@ use std::time::Instant;
 #[derive(Clone, Debug)]
 pub(crate) enum Item {
     Session(String),
+    /// a terminal on this machine, in this folder
+    TerminalHere(String, Option<String>),
     /// the split picker: start an agent in the empty pane
     PaneNew,
     /// the split picker: a terminal on this machine in the empty pane
@@ -202,6 +204,26 @@ impl Palette {
                     c::ACCENT(),
                 ));
             }
+        }
+        // a terminal where this session is, from wherever you see it
+        let here = if d.view == View::Wall {
+            super::wall::focused_session(d)
+        } else if d.view == View::Fleet {
+            super::fleet::selected_session(d)
+        } else {
+            None
+        };
+        if let Some(s) = here {
+            let dir = Some(s.cwd.clone()).filter(|c| c.starts_with('/'));
+            items.push((
+                Item::TerminalHere(s.host.clone(), dir.clone()),
+                format!(
+                    "Terminal in {}",
+                    dir.as_deref().unwrap_or("this machine's home")
+                ),
+                format!("on {} (!)", s.host),
+                c::ACCENT(),
+            ));
         }
         for h in &d.fleet.hosts {
             for s in &h.sessions {
@@ -709,6 +731,7 @@ impl Palette {
 pub(crate) fn run(d: &mut Dash, p: Palette) -> Option<Handoff> {
     match p.chosen()? {
         Item::Session(k) if d.view == View::Wall => super::wall::add(d, k),
+        Item::TerminalHere(h, dir) => super::quick::shell(d, &h, dir.as_deref()),
         Item::PaneNew => super::wall::new_in_pane(d, None),
         Item::PaneShell(h) => super::wall::new_in_pane(d, Some(h)),
         // a session: what enter does in Fleet (Focus, unless enter_opens says otherwise)

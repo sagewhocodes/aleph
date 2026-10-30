@@ -1676,9 +1676,7 @@ impl Dash {
             }
             // (only a plain q: ctrl+q is how you back out of Focus, and one press
             // too many must not close the dashboard)
-            KeyCode::Char('q') if self.view == View::Fleet && !ctrl => {
-                return Some(Handoff::Quit)
-            }
+            KeyCode::Char('q') if self.view == View::Fleet && !ctrl => return Some(Handoff::Quit),
             KeyCode::Char('q') if self.view == View::Fleet => return None,
             // Monitor › Timeline's tree gives its keys back first
             KeyCode::Esc

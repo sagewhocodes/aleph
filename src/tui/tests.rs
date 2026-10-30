@@ -4569,8 +4569,22 @@ fn a_ready_terminal_opens_instead_of_a_new_one() {
     // a folder that has one: that one
     super::quick::shell(&mut d, "b31", Some("/srv/ox"));
     assert_eq!(open(&d), "b31|w1:p71");
+    // ! in Focus, on a session: the terminal in its folder (Aleph's keys only)
+    wall::focus_on(&mut d, "b31|w1:p71", View::Fleet);
+    d.on_key(k(KeyCode::Char('!')));
+    assert!(d.wall.typing, "typing: the agent's");
+    leave_typing(&mut d);
+    d.fleet.host_mut("b31").unwrap().sessions[1].cwd = "/srv/ox".into();
+    wall::focus_on(&mut d, "b31|w1:p2", View::Fleet);
+    leave_typing(&mut d);
+    d.on_key(k(KeyCode::Char('!')));
+    assert_eq!(open(&d), "b31|w1:p71");
+    // and from ctrl+k, by name
+    leave_typing(&mut d);
+    d.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
+    assert!(render(&mut d, 140, 40).contains("Terminal in /srv/ox"));
+    d.mode = Mode::Normal;
     // leaving Focus closes nothing
-    d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
     d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
     assert_eq!(d.view, View::Fleet);
     assert!(fleet::session(&d, "b31|w1:p70").is_some());
@@ -4869,7 +4883,10 @@ fn ctrl_q_gives_the_keys_back_then_goes_to_fleet() {
     // one press too many doesn't close the dashboard; a plain q still does
     assert!(d.on_key(ctrl('q')).is_none());
     assert_eq!(d.view, View::Fleet);
-    assert!(matches!(d.on_key(k(KeyCode::Char('q'))), Some(Handoff::Quit)));
+    assert!(matches!(
+        d.on_key(k(KeyCode::Char('q'))),
+        Some(Handoff::Quit)
+    ));
     wall::focus_on(&mut d, "b31|w1:p1", View::Inbox);
     d.on_key(ctrl('q'));
     d.on_key(k(KeyCode::Esc));
