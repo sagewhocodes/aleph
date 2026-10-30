@@ -85,6 +85,9 @@ case "$1 $2" in
   "tab list") cat "$T";;
   "pane split") echo "{\"result\":{\"type\":\"pane_info\",\"pane\":{\"pane_id\":\"w1:p$n\"}}}";;
   "agent start")
+    # $ST/start_delay: seconds it takes. $ST/start_fails: it can't start at all
+    [[ -f $ST/start_delay ]] && sleep "$(cat "$ST/start_delay")"
+    [[ -f $ST/start_fails ]] && err agent_start_failed "the agent would not start"
     name=$3; pane=$(opt --pane "$@"); kind=$(opt --kind "$@")
     # its tab: where the fake socket put that pane (a layout, a move), else wN:pK's wN:tK
     tab=$(awk -v p="$pane" '$1==p{t=$2} END{print t}' "$ST/panetab_$host" 2>/dev/null)
@@ -111,11 +114,16 @@ case "$1 $2" in
     st=$(jq -r --arg p "$3" '.result.agents[] | select(.pane_id==$p or .name==$p) | .agent_status' "$A")
     [[ $st == blocked ]] && err agent_blocked "agent is waiting for input"
     echo "PROMPT $3 ${*:4}" >> "$ST/log"; ok;;
-  "pane run") echo "RUN $3 ${*:4}" >> "$ST/log"; ok;;
+  # a typed command runs (its pane is busy), or with $ST/start_fails the shell can't find it
+  "pane run") echo "RUN $3 ${*:4}" >> "$ST/log"
+    if [[ -f $ST/start_fails ]]; then printf 'zsh: command not found: %s\n' "${4%% *}" > "$ST/screen_${3//:/_}"
+    else printf %s "${*:4}" > "$ST/busy_${3//:/_}"; fi
+    ok;;
   "pane send-keys"|"pane send-text"|"server reload-config") ok;;
   "agent wait") echo "WAIT $3" >> "$ST/log"; st=$(jq -r --arg p "$3" '.result.agents[] | select(.pane_id==$p or .name==$p) | .agent_status' "$A"); echo "{\"result\":{\"type\":\"agent_wait\",\"agent\":{\"pane_id\":\"$3\",\"agent_status\":\"${st:-idle}\"}}}";;
   "pane move") echo "{\"result\":{\"move_result\":{\"pane\":{\"pane_id\":\"$3\"},\"tab\":{\"tab_id\":\"w1:t$n\"}}}}";;
   "pane read"|"agent read")
+    [[ -f $ST/screen_${3//:/_} ]] && { cat "$ST/screen_${3//:/_}"; exit 0; }
     if [[ " $* " == *" detection "* ]]; then cat <<'TXT'
  Do you want to run this command?
    cargo build --release --target x86_64-unknown-linux-musl

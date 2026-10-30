@@ -297,10 +297,15 @@ pub(crate) enum Bg {
         wt: Vec<herdr::Worktree>,
     },
     /// a session Quick start began: (`host:pane`, its name), and open Focus?
-    Started {
-        host: String,
+    /// a start's progress, in herdr's steps (`quick.rs`)
+    StartStep {
+        id: u64,
+        label: String,
+    },
+    /// a start answered: (selector, name), or why not
+    StartDone {
+        id: u64,
         result: Result<(String, String), String>,
-        focus: bool,
     },
 }
 
@@ -486,6 +491,10 @@ pub struct Dash {
     /// a session to select once a poll has seen it (`aleph focus`, Quick
     /// start): (selector, open it in Focus, since)
     pending_focus: Option<(String, bool, Instant)>,
+    /// sessions on their way: each a row in Fleet (`quick.rs`)
+    pub(crate) starting: Vec<quick::Starting>,
+    /// starts dropped while running: their panes go when they answer
+    start_gone: Vec<(u64, String, herdr::PanesOut)>,
     /// a newer build on disk (the resting tmux dashboard restarts on it)
     upgrade: crate::watch::Upgrade,
     /// a newer build is installed than the one running (the header says so;
@@ -572,6 +581,8 @@ impl Dash {
             services,
             hints: MoshiSession::new(in_moshi_session()),
             pending_focus: start.focus.clone().map(|q| (q, true, Instant::now())),
+            starting: Vec::new(),
+            start_gone: Vec::new(),
             upgrade: crate::watch::Upgrade::start(),
             new_build: false,
             net: crate::net::Net::start(net_target, Duration::from_secs(5)),
@@ -1168,18 +1179,8 @@ impl Dash {
                     }
                 }
             }
-            Bg::Started {
-                host,
-                result,
-                focus,
-            } => match result {
-                Ok((sel, name)) => {
-                    self.toast(Level::Ok, format!("started {name} on {host}"));
-                    self.fleet.refresh(Some(&host));
-                    self.pending_focus = Some((sel, focus, Instant::now()));
-                }
-                Err(e) => self.toast(Level::Err, format!("{host}: {e}")),
-            },
+            Bg::StartStep { id, label } => quick::on_step(self, id, label),
+            Bg::StartDone { id, result } => quick::on_done(self, id, result),
             Bg::Done { ok, msg, refresh } => {
                 if !msg.is_empty() {
                     self.toast(if ok { Level::Ok } else { Level::Err }, msg);
@@ -2640,6 +2641,7 @@ impl Dash {
             crate::showcase::capture_alerts(|m| self.toast(Level::Warn, m));
             self.follow_hint();
             self.open_pending_focus();
+            quick::settle(self);
             // showcase's demo world went on or off: this screen starts again
             // as the other world (same alternate screen, no flash)
             if crate::showcase::world_changed() {
@@ -3684,20 +3686,14 @@ pub fn run_dashboard_in(tui: Tui, cfg: Config, start: Start) -> std::process::Ex
                     }
                     Ok(Some(crate::browse::Picked::New(dir))) => {
                         let args = ["--host".to_string(), target.ssh.clone()];
-                        let mut o = match crate::cli::parse_new(&args, &d.cfg) {
-                            Ok(x) => x.opts,
-                            Err(e) => {
-                                d.flash(e, true);
-                                continue;
+                        match crate::cli::parse_new(&args, &d.cfg) {
+                            Ok(x) => {
+                                let mut o = x.opts;
+                                o.dir = Some(dir);
+                                quick::begin(&mut d, &target.ssh, o, false);
                             }
-                        };
-                        o.dir = Some(dir);
-                        o.live = d.fleet.live_names();
-                        crate::cli::fill_names(&mut o);
-                        let (t2, r) =
-                            crate::launch::run(tui, target, crate::launch::Job::New(o), wait, col);
-                        tui = t2;
-                        d.landed(target, r);
+                            Err(e) => d.flash(e, true),
+                        }
                     }
                     Ok(Some(crate::browse::Picked::Attach(s))) => {
                         let (t2, r) = crate::launch::run(

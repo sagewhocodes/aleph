@@ -143,7 +143,7 @@ pub(crate) fn rows(d: &Dash) -> Vec<RowId> {
     };
     for (i, r) in fleet::rows(d).into_iter().enumerate() {
         match r {
-            RowId::Sess(_) | RowId::Outside(_) => group.push((i, r)),
+            RowId::Sess(_) | RowId::Outside(_) | RowId::Starting(_) => group.push((i, r)),
             other => {
                 flush(&mut group, &mut out);
                 out.push(other);
@@ -384,7 +384,7 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
         let idx = all.iter().position(|r| r == row);
         let last_child = rows
             .get(j + 1)
-            .is_none_or(|n| !matches!(n, RowId::Sess(_) | RowId::Outside(_)));
+            .is_none_or(|n| !matches!(n, RowId::Sess(_) | RowId::Outside(_) | RowId::Starting(_)));
         let add = |ls: Vec<Line<'static>>,
                    lines: &mut Vec<Line<'static>>,
                    map: &mut Vec<Option<usize>>| {
@@ -421,6 +421,16 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
                 if let Some(o) = super::outside::find(d, k) {
                     add(
                         vec![outside_line(d, &o, &cw, w, on, last_child)],
+                        &mut lines,
+                        &mut map,
+                    );
+                }
+            }
+            RowId::Starting(id) => {
+                if let Some(st) = d.starting.iter().find(|s| s.id == *id) {
+                    let g = if last_child { "    └ " } else { "    ├ " };
+                    add(
+                        vec![fleet::starting_line(d, st, g, w, on)],
                         &mut lines,
                         &mut map,
                     );

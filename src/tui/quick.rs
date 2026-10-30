@@ -5,16 +5,65 @@
 //! it (in the background, then selected; a terminal opens to type into). `o`
 //! starts it in Focus, `i` starts it from either column. The
 //! close checklist (`x` on a machine): its sessions, ticked, one confirm.
+//!
+//! Every start from the dashboard is a `Starting`: its row is in Fleet at once
+//! with a spinner, becomes the session when it's up, and says why when it
+//! isn't (`r` tries again, `x` drops it).
 
-use super::{Bg, Dash, Handoff, Level, Mode, Pending};
-use crate::herdr::{Herdr, Session, Workspace, Worktree};
+use super::fleet::RowId;
+use super::{Bg, Dash, Handoff, Level, Mode, Pending, View};
+use crate::herdr::{Herdr, NewOpts, PanesOut, Session, Workspace, Worktree};
 use crate::ui::{self, c};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 static GEN: AtomicU64 = AtomicU64::new(0);
+static START_ID: AtomicU64 = AtomicU64::new(0);
+
+/// How long herdr's "started" may stay unseen by a poll before it's a failure.
+const LISTING_WAIT: Duration = Duration::from_secs(20);
+
+/// A session on its way: a row in Fleet before anything is known about it.
+pub(crate) struct Starting {
+    pub id: u64,
+    pub host: String,
+    /// what it was asked to be, for another try
+    pub opts: NewOpts,
+    /// open it in Focus once it's up
+    pub focus: bool,
+    pub t0: Instant,
+    /// what it's doing now, in herdr's steps
+    pub step: String,
+    /// its panes once they exist: the row stands in for them until it's up
+    pub panes: PanesOut,
+    pub state: StartState,
+}
+
+pub(crate) enum StartState {
+    Running,
+    /// herdr says it started: until a poll lists it (selector, since)
+    Listing(String, Instant),
+    Failed(String),
+}
+
+impl Starting {
+    pub fn what(&self) -> String {
+        name_of(&self.opts.agent_id())
+    }
+
+    /// Where it's going, as the row says it (empty: where herdr opens one).
+    pub fn folder(&self, d: &Dash) -> String {
+        self.opts
+            .dir
+            .as_deref()
+            .map(|p| short(d, &self.host, &crate::path::show(p)))
+            .unwrap_or_default()
+    }
+}
 
 /// Where a new session goes.
 #[derive(Clone, Debug, PartialEq)]
@@ -745,7 +794,6 @@ pub(crate) fn start(d: &mut Dash, q: QuickStart, focus: bool) -> Option<Handoff>
         }
     };
     o.agent = agent.id.clone();
-    o.no_focus = true;
     if let Some(p) = &dir {
         o.dir = Some(crate::path::normalize(p.as_bytes()));
     }
@@ -755,27 +803,198 @@ pub(crate) fn start(d: &mut Dash, q: QuickStart, focus: bool) -> Option<Handoff>
     if q.worktree && matches!(place, Place::Folder(_)) {
         o.worktree = Some(String::new());
     }
+    begin(d, &host, o, focus);
+    None
+}
+
+/// Start `o` on `host` in the background: its row is there at once, selected.
+pub(crate) fn begin(d: &mut Dash, host: &str, mut o: NewOpts, focus: bool) -> u64 {
+    o.no_focus = true;
     o.live = d.fleet.live_names();
     crate::cli::fill_names(&mut o);
-    let what = crate::agents::label(&o.agent_id()).to_string();
-    d.toast(Level::Info, format!("starting {what} on {host}…"));
-    let (t, tx) = (d.target_of(&host), d.tx.clone());
+    let id = START_ID.fetch_add(1, Ordering::Relaxed) + 1;
+    let panes = Arc::new(Mutex::new(Vec::new()));
+    o.panes_out = Some(panes.clone());
+    let st = Starting {
+        id,
+        host: host.to_string(),
+        opts: o,
+        focus,
+        t0: Instant::now(),
+        step: String::new(),
+        panes,
+        state: StartState::Running,
+    };
+    let what = st.what();
+    d.starting.push(st);
+    if let Some(h) = d.fleet.host_mut(host) {
+        h.collapsed = false;
+    }
+    if d.view == View::Fleet {
+        super::fleet::select(d, RowId::Starting(id));
+    } else {
+        d.toast(Level::Info, format!("starting {what} on {host}…"));
+    }
+    run_start(d, id);
+    id
+}
+
+/// The start itself, off the UI thread.
+fn run_start(d: &Dash, id: u64) {
+    if cfg!(test) {
+        return;
+    }
+    let Some(st) = d.starting.iter().find(|s| s.id == id) else {
+        return;
+    };
+    let (t, tx, o) = (d.target_of(&st.host), d.tx.clone(), st.opts.clone());
     std::thread::spawn(move || {
+        let steps = tx.clone();
         let r = Herdr::new(&t)
-            .new_session(&o, &mut |_, _| {})
+            .new_session(&o, &mut |_, label| {
+                let _ = steps.send(Bg::StartStep { id, label });
+            })
             .and_then(|v| {
                 crate::launch::after_start(&t, &o, &v);
                 v.first()
                     .map(|s| (format!("{}:{}", t.ssh, s.pane), s.name.clone()))
                     .ok_or_else(|| "nothing started".to_string())
             });
-        let _ = tx.send(Bg::Started {
-            host: t.ssh.clone(),
-            result: r,
-            focus,
-        });
+        let _ = tx.send(Bg::StartDone { id, result: r });
     });
-    None
+}
+
+pub(crate) fn on_step(d: &mut Dash, id: u64, label: String) {
+    if let Some(st) = d.starting.iter_mut().find(|s| s.id == id) {
+        st.step = label;
+    }
+}
+
+/// `new_session` answered.
+pub(crate) fn on_done(d: &mut Dash, id: u64, result: Result<(String, String), String>) {
+    // dropped while it ran: what it made goes too
+    if let Some(i) = d.start_gone.iter().position(|g| g.0 == id) {
+        let (_, host, panes) = d.start_gone.remove(i);
+        if result.is_ok() {
+            let panes = panes.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            close_panes(d, &host, panes);
+        }
+        return;
+    }
+    let in_fleet = d.view == View::Fleet;
+    let Some(st) = d.starting.iter_mut().find(|s| s.id == id) else {
+        return;
+    };
+    let host = st.host.clone();
+    match result {
+        Ok((sel, name)) => {
+            st.state = StartState::Listing(sel, Instant::now());
+            if !in_fleet {
+                d.toast(Level::Ok, format!("started {name} on {host}"));
+            }
+            d.fleet.refresh(Some(&host));
+            settle(d);
+        }
+        Err(e) => {
+            // herdr's side closed what it made
+            st.panes.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            st.state = StartState::Failed(e.clone());
+            d.toast(Level::Err, format!("{host}: {e}"));
+        }
+    }
+}
+
+/// Rows whose session a poll has now seen hand over to it (the selection too,
+/// if it's still on them); ones nobody can see after a while are failures.
+pub(crate) fn settle(d: &mut Dash) {
+    if d.starting.is_empty() {
+        return;
+    }
+    let all: Vec<Session> = d.fleet.sessions().into_iter().cloned().collect();
+    let mut up: Vec<(u64, String, bool)> = Vec::new();
+    for st in &mut d.starting {
+        let StartState::Listing(sel, since) = &st.state else {
+            continue;
+        };
+        let late = since.elapsed() > LISTING_WAIT;
+        match crate::herdr::pick(&all, sel) {
+            Some(s) if !s.launch_pending || late => {
+                up.push((st.id, s.key(), s.agent == crate::agents::SHELL))
+            }
+            None if late => {
+                st.state =
+                    StartState::Failed("herdr said it started, but doesn't list it".to_string())
+            }
+            _ => {}
+        }
+    }
+    for (id, key, shell) in up {
+        let focus = d.starting.iter().any(|s| s.id == id && s.focus);
+        d.starting.retain(|s| s.id != id);
+        if d.fv.sel == Some(RowId::Starting(id)) {
+            super::fleet::select(d, RowId::Sess(key.clone()));
+        }
+        if focus {
+            super::wall::focus_on(d, &key, View::Fleet);
+            // a plain terminal is for typing into
+            if shell {
+                d.wall.typing = true;
+            }
+        }
+    }
+}
+
+/// The panes the machine's starting rows stand in for.
+pub(crate) fn hidden(d: &Dash, host: &str) -> Vec<String> {
+    d.starting
+        .iter()
+        .filter(|s| s.host == host && !matches!(s.state, StartState::Failed(_)))
+        .flat_map(|s| s.panes.lock().unwrap_or_else(|e| e.into_inner()).clone())
+        .collect()
+}
+
+/// `r` on a row that failed.
+pub(crate) fn retry(d: &mut Dash, id: u64) {
+    let live = d.fleet.live_names();
+    let Some(st) = d.starting.iter_mut().find(|s| s.id == id) else {
+        return;
+    };
+    if !matches!(st.state, StartState::Failed(_)) {
+        return;
+    }
+    st.state = StartState::Running;
+    st.t0 = Instant::now();
+    st.step.clear();
+    st.opts.live = live;
+    st.panes.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    run_start(d, id);
+}
+
+/// `x` on a starting row: gone, and so is anything it made (or goes on to make).
+pub(crate) fn dismiss(d: &mut Dash, id: u64) {
+    let Some(i) = d.starting.iter().position(|s| s.id == id) else {
+        return;
+    };
+    let st = d.starting.remove(i);
+    let panes = st.panes.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if matches!(st.state, StartState::Running) {
+        d.start_gone.push((id, st.host.clone(), st.panes.clone()));
+    }
+    close_panes(d, &st.host, panes);
+}
+
+fn close_panes(d: &Dash, host: &str, panes: Vec<String>) {
+    if cfg!(test) || panes.is_empty() {
+        return;
+    }
+    let t = d.target_of(host);
+    d.spawn(Some(host.to_string()), move || {
+        let h = Herdr::new(&t);
+        for p in &panes {
+            let _ = h.close_pane(p);
+        }
+        Ok(String::new())
+    });
 }
 
 /// `!`: a plain terminal (no agent) on `host`, in `dir` (else where herdr
@@ -810,26 +1029,7 @@ pub(crate) fn shell(d: &mut Dash, host: &str, dir: Option<&str>) {
         Some(p) => o.dir = Some(crate::path::normalize(p.as_bytes())),
         None => o.name = Some(crate::agents::READY_SHELL.into()),
     }
-    o.no_focus = true;
-    o.live = d.fleet.live_names();
-    crate::cli::fill_names(&mut o);
-    d.toast(Level::Info, format!("opening a terminal on {host}…"));
-    let (t, tx) = (d.target_of(host), d.tx.clone());
-    std::thread::spawn(move || {
-        let r = Herdr::new(&t)
-            .new_session(&o, &mut |_, _| {})
-            .and_then(|v| {
-                crate::launch::after_start(&t, &o, &v);
-                v.first()
-                    .map(|x| (format!("{}:{}", t.ssh, x.pane), x.name.clone()))
-                    .ok_or_else(|| "nothing started".to_string())
-            });
-        let _ = tx.send(Bg::Started {
-            host: t.ssh.clone(),
-            result: r,
-            focus: true,
-        });
-    });
+    begin(d, host, o, true);
 }
 
 /// `D`: the same agent again, in the same folder on the same machine, with
@@ -860,33 +1060,7 @@ pub(crate) fn duplicate(d: &mut Dash, s: &Session) {
     if let Some(e) = h {
         o.args.extend(e.args.iter().cloned());
     }
-    o.no_focus = true;
-    o.live = d.fleet.live_names();
-    crate::cli::fill_names(&mut o);
-    d.toast(
-        Level::Info,
-        format!(
-            "another {} beside {}…",
-            crate::agents::label(&s.agent),
-            s.display()
-        ),
-    );
-    let (t, tx) = (d.target_of(&host), d.tx.clone());
-    std::thread::spawn(move || {
-        let r = Herdr::new(&t)
-            .new_session(&o, &mut |_, _| {})
-            .and_then(|v| {
-                crate::launch::after_start(&t, &o, &v);
-                v.first()
-                    .map(|x| (format!("{}:{}", t.ssh, x.pane), x.name.clone()))
-                    .ok_or_else(|| "nothing started".to_string())
-            });
-        let _ = tx.send(Bg::Started {
-            host: t.ssh.clone(),
-            result: r,
-            focus: false,
-        });
-    });
+    begin(d, &host, o, false);
 }
 
 // ------------------------------------------------------------------ close

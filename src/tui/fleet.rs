@@ -27,6 +27,8 @@ pub enum RowId {
     Avail(String),
     /// an agent running outside herdr on a machine (`host|pid`)
     Outside(String),
+    /// a session on its way (`quick::Starting`)
+    Starting(u64),
 }
 
 pub(crate) struct Preview {
@@ -117,6 +119,11 @@ impl State {
         match selected(d)? {
             RowId::Host(h) | RowId::Avail(h) => Some(h),
             RowId::Sess(k) | RowId::Outside(k) => k.split_once('|').map(|x| x.0.to_string()),
+            RowId::Starting(id) => d
+                .starting
+                .iter()
+                .find(|s| s.id == id)
+                .map(|s| s.host.clone()),
             RowId::Others => None,
         }
     }
@@ -181,7 +188,12 @@ pub(crate) fn rows(d: &Dash) -> Vec<RowId> {
         hosts.sort_by_key(|h| rank(&h.alias));
     }
     for h in hosts {
-        let ss: Vec<&Session> = h.sessions.iter().filter(|s| matches(q, s)).collect();
+        let starting = super::quick::hidden(d, &h.alias);
+        let ss: Vec<&Session> = h
+            .sessions
+            .iter()
+            .filter(|s| matches(q, s) && !starting.contains(&s.pane_id))
+            .collect();
         // agents running outside herdr there, in the same tree
         let out: Vec<super::outside::Outside> = super::outside::list(d, &h.alias)
             .into_iter()
@@ -207,6 +219,12 @@ pub(crate) fn rows(d: &Dash) -> Vec<RowId> {
             continue;
         }
         v.extend(ss.into_iter().map(|s| RowId::Sess(s.key())));
+        v.extend(
+            d.starting
+                .iter()
+                .filter(|s| s.host == h.alias)
+                .map(|s| RowId::Starting(s.id)),
+        );
         v.extend(out.iter().map(|o| RowId::Outside(o.key())));
     }
     // machines you could add: ~/.ssh/config aliases outside the fleet
@@ -456,6 +474,7 @@ pub(crate) fn click(d: &mut Dash, i: usize, double: bool) -> Option<Handoff> {
             None
         }
         RowId::Sess(_) => open(d),
+        RowId::Starting(_) => None,
         RowId::Outside(k) => {
             super::outside::ask_reopen(d, &k);
             None
@@ -600,7 +619,7 @@ pub(crate) fn run_act(d: &mut Dash, act: Act) -> Option<Handoff> {
             }
             Some(RowId::Host(h)) => set_collapsed(d, &h, None),
             Some(RowId::Others) => d.fv.others_open = !d.fv.others_open,
-            Some(RowId::Avail(_)) | Some(RowId::Outside(_)) | None => {}
+            Some(RowId::Avail(_) | RowId::Outside(_) | RowId::Starting(_)) | None => {}
         },
         Act::Collapse => {
             if let Some(h) = host {
@@ -614,6 +633,11 @@ pub(crate) fn run_act(d: &mut Dash, act: Act) -> Option<Handoff> {
         }
         Act::Filter => d.fv.filtering = true,
         Act::Refresh => {
+            // a start that failed: another go
+            if let Some(RowId::Starting(id)) = &sel {
+                super::quick::retry(d, *id);
+                return None;
+            }
             // on a machine: a fresh connection to it; elsewhere: poll them all
             if let Some(RowId::Host(h)) = &sel {
                 let (h, tx) = (h.clone(), d.tx.clone());
@@ -635,6 +659,9 @@ pub(crate) fn run_act(d: &mut Dash, act: Act) -> Option<Handoff> {
         Act::Open => match sel {
             Some(RowId::Host(h)) => set_collapsed(d, &h, None),
             Some(RowId::Sess(_)) => return open(d),
+            Some(RowId::Starting(_)) => {
+                d.note("not up yet: enter opens it once it has started");
+            }
             Some(RowId::Outside(k)) => super::outside::ask_reopen(d, &k),
             Some(RowId::Others) => d.fv.others_open = !d.fv.others_open,
             Some(RowId::Avail(a)) => super::hosts::toggle_fleet(d, &a),
@@ -800,6 +827,10 @@ pub(crate) fn run_act(d: &mut Dash, act: Act) -> Option<Handoff> {
             ));
         }
         Act::Close => {
+            if let Some(RowId::Starting(id)) = &sel {
+                super::quick::dismiss(d, *id);
+                return None;
+            }
             // a machine with nothing marked: tick which of its sessions go
             if let (true, Some(RowId::Host(h))) = (d.fv.marked.is_empty(), &sel) {
                 super::quick::close_list(d, h);
@@ -1130,6 +1161,17 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
             ("-", "remove"),
             ("ctrl+k", "palette"),
         ],
+        Some(RowId::Starting(id)) => {
+            let failed = d
+                .starting
+                .iter()
+                .any(|s| s.id == id && matches!(s.state, super::quick::StartState::Failed(_)));
+            if failed {
+                vec![("r", "try again"), ("x", "drop it"), ("↑↓", "move")]
+            } else {
+                vec![("x", "cancel"), ("↑↓", "move"), ("q", "quit")]
+            }
+        }
         Some(RowId::Others) => vec![
             ("enter", "show machines you could add"),
             ("+", "add a new one"),
@@ -1922,6 +1964,11 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
     // the tree under each machine: is the next row still one of its children?
     let host_of = |r: &RowId| match r {
         RowId::Sess(k) | RowId::Outside(k) => k.split_once('|').map(|x| x.0.to_string()),
+        RowId::Starting(id) => d
+            .starting
+            .iter()
+            .find(|s| s.id == *id)
+            .map(|s| s.host.clone()),
         _ => None,
     };
     let last_child = |i: usize| {
@@ -1981,6 +2028,13 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
                 if let Some(o) = super::outside::find(d, k) {
                     let g = super::outside::guide(last_child(i));
                     lines.push(super::outside::line(d, &o, g, w, (nw, mw, sw), is_sel));
+                    map.push(Some(i));
+                }
+            }
+            RowId::Starting(id) => {
+                if let Some(st) = d.starting.iter().find(|s| s.id == *id) {
+                    let g = format!("  {}  ", super::outside::guide(last_child(i)));
+                    lines.push(starting_line(d, st, &g, w, is_sel));
                     map.push(Some(i));
                 }
             }
@@ -2189,6 +2243,7 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
             d.hits.buttons.extend(b);
         }
         Some(RowId::Avail(a)) => draw_avail(d, f, detail_r, &a),
+        Some(RowId::Starting(id)) => draw_starting(d, f, detail_r, id),
         Some(RowId::Outside(k)) => {
             if let Some(o) = super::outside::find(d, &k) {
                 let block = ui::panel(
@@ -2210,6 +2265,115 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
 }
 
 /// A machine outside the fleet, one line: alias, where it points, login state.
+/// A session on its way: a spinner and what it's doing, or why it didn't start.
+pub(crate) fn starting_line(
+    d: &Dash,
+    st: &super::quick::Starting,
+    guide: &str,
+    w: usize,
+    sel: bool,
+) -> Line<'static> {
+    use super::quick::StartState;
+    let (mark, col, state) = match &st.state {
+        StartState::Failed(e) => ("✗".to_string(), c::RED(), format!("couldn't start: {e}")),
+        StartState::Listing(..) => (
+            ui::spinner(d.t0).to_string(),
+            c::ACCENT(),
+            "almost up…".to_string(),
+        ),
+        StartState::Running => (
+            ui::spinner(d.t0).to_string(),
+            c::ACCENT(),
+            if st.step.is_empty() {
+                "starting…".to_string()
+            } else {
+                st.step.clone()
+            },
+        ),
+    };
+    let mut v = vec![
+        Span::styled(guide.to_string(), ui::fg(c::LINE())),
+        Span::styled(format!("{mark} "), ui::fg(col)),
+        crate::icons::agent(&st.opts.agent_id()),
+        Span::raw(" "),
+        Span::styled(st.what(), ui::bold()),
+        Span::styled(format!("  {state}"), ui::fg(col)),
+    ];
+    let folder = st.folder(d);
+    if !folder.is_empty() {
+        v.push(Span::styled(format!("  {folder}"), ui::faint()));
+    }
+    let line = fit_line(&Line::from(v), w)
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    if sel {
+        line.style(ui::selected())
+    } else {
+        line
+    }
+}
+
+/// The right panel for a session on its way.
+fn draw_starting(d: &Dash, f: &mut Frame, r: Rect, id: u64) {
+    use super::quick::StartState;
+    let Some(st) = d.starting.iter().find(|s| s.id == id) else {
+        return;
+    };
+    let block = ui::panel(
+        Line::from(vec![
+            Span::styled(st.what(), ui::bold()),
+            Span::styled(format!(" on {}", st.host), ui::faint()),
+        ]),
+        false,
+    );
+    let inner = block.inner(r);
+    f.render_widget(block, r);
+    let folder = st.folder(d);
+    let mut lines = vec![Line::from(vec![
+        Span::styled("in  ", ui::faint()),
+        Span::raw(if folder.is_empty() {
+            "where herdr opens a new tab".to_string()
+        } else {
+            folder
+        }),
+    ])];
+    lines.push(Line::raw(""));
+    let w = inner.width.saturating_sub(2).max(10) as usize;
+    match &st.state {
+        StartState::Failed(e) => {
+            lines.push(Line::from(Span::styled(
+                "✗ It didn't start",
+                ui::fg(c::RED()).add_modifier(Modifier::BOLD),
+            )));
+            for l in ui::wrap(e, w) {
+                lines.push(Line::from(Span::styled(l, ui::muted())));
+            }
+            lines.push(Line::raw(""));
+            lines.push(ui::hints(&[("r", "try again"), ("x", "drop it")]));
+        }
+        _ => {
+            let step = match &st.state {
+                StartState::Listing(..) => "herdr has it, waiting to see it listed".to_string(),
+                _ if st.step.is_empty() => "starting…".to_string(),
+                _ => st.step.clone(),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("{} ", ui::spinner(d.t0)), ui::fg(c::ACCENT())),
+                Span::raw(step),
+                Span::styled(format!("  {}s", st.t0.elapsed().as_secs()), ui::faint()),
+            ]));
+            lines.push(Line::raw(""));
+            lines.push(Line::from(Span::styled(
+                "Enter opens it once it's up.",
+                ui::muted(),
+            )));
+            lines.push(ui::hints(&[("x", "cancel")]));
+        }
+    }
+    f.render_widget(Paragraph::new(lines), inner.inner(Margin::new(1, 1)));
+}
+
 pub(crate) fn avail_line(d: &Dash, alias: &str, w: usize, sel: bool) -> Line<'static> {
     let row = d.hv.rows.iter().find(|r| r.alias == alias);
     let target = row

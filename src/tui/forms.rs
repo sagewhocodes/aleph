@@ -1759,11 +1759,8 @@ pub(crate) fn submit_new(d: &mut Dash, mut nf: NewForm) -> Option<Handoff> {
         });
         return None;
     }
-    d.toast(Level::Info, format!("starting on {host}…"));
-    Some(Handoff::New {
-        target: d.target_of(&host),
-        opts: o,
-    })
+    super::quick::begin(d, &host, o, false);
+    None
 }
 
 // ------------------------------------------------------------------ add host

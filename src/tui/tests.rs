@@ -6,6 +6,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
+fn ch_key(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+}
+
 fn k(c: KeyCode) -> KeyEvent {
     KeyEvent::new(c, KeyModifiers::NONE)
 }
@@ -141,6 +145,8 @@ fn dash() -> Dash {
         api: None,
         api_seen: None,
         pending_focus: None,
+        starting: Vec::new(),
+        start_gone: Vec::new(),
         upgrade: crate::watch::Upgrade::start(),
         net: crate::net::Net::quiet(),
         net_was: 0,
@@ -588,6 +594,139 @@ fn quick_start_opens_a_terminal_where_you_picked() {
         QuickRes::Start { focus: true }
     ));
     assert_eq!(q.place(), Some(Place::Folder("/home/u/proj".into())));
+}
+
+/// A start has its row at once, selected. Enter waits for it, and it hands
+/// over to the session the moment a poll has seen it.
+#[test]
+fn a_start_has_its_row_at_once_and_becomes_the_session() {
+    use super::quick::{begin, StartState};
+    let mut d = dash();
+    let o = NewOpts {
+        agent: "codex".into(),
+        dir: Some(b"/home/u/proj".to_vec()),
+        ..Default::default()
+    };
+    let id = begin(&mut d, "b31", o, false);
+    assert_eq!(d.fv.sel, Some(fleet::RowId::Starting(id)));
+    let s = render(&mut d, 150, 40);
+    assert!(s.contains("Codex") && s.contains("starting…"), "{s}");
+    assert!(s.contains("Enter opens it once it's up"), "{s}");
+    // its steps show as they happen; enter waits
+    d.on_bg(Bg::StartStep {
+        id,
+        label: "Opening a new tab".into(),
+    });
+    assert!(render(&mut d, 150, 40).contains("Opening a new tab"));
+    d.on_key(k(KeyCode::Enter));
+    assert!(matches!(d.mode, Mode::Normal));
+    assert_eq!(d.view, View::Fleet);
+    assert_eq!(d.fv.sel, Some(fleet::RowId::Starting(id)));
+    // the pane exists before the agent is up: the row stands in for it
+    let key = {
+        let h = d.fleet.host_mut("b31").unwrap();
+        let mut s = h.sessions[0].clone();
+        s.pane_id = "w1:p70".into();
+        s.name = "newone".into();
+        s.label = "codex_newone:proj".into();
+        s.agent = "codex".into();
+        s.launch_pending = true;
+        let key = s.key();
+        h.sessions.push(s);
+        key
+    };
+    d.starting[0]
+        .panes
+        .lock()
+        .unwrap()
+        .push("w1:p70".to_string());
+    assert!(!fleet::rows(&d).contains(&fleet::RowId::Sess(key.clone())));
+    d.on_bg(Bg::StartDone {
+        id,
+        result: Ok(("b31:w1:p70".into(), "newone".into())),
+    });
+    // herdr still launching it: the row stays
+    assert!(matches!(d.starting[0].state, StartState::Listing(..)));
+    // up: the row hands over, the selection with it
+    d.fleet
+        .host_mut("b31")
+        .unwrap()
+        .sessions
+        .last_mut()
+        .unwrap()
+        .launch_pending = false;
+    super::quick::settle(&mut d);
+    assert!(d.starting.is_empty());
+    assert_eq!(d.fv.sel, Some(fleet::RowId::Sess(key.clone())));
+    assert!(fleet::rows(&d).contains(&fleet::RowId::Sess(key)));
+}
+
+/// A failed start says why on its row: `r` tries again, `x` drops it, and
+/// someone who moved on keeps their place.
+#[test]
+fn a_failed_start_says_why_retries_and_drops() {
+    use super::quick::{begin, StartState};
+    let mut d = dash();
+    let o = NewOpts {
+        agent: "codex".into(),
+        ..Default::default()
+    };
+    let id = begin(&mut d, "b31", o, false);
+    d.on_bg(Bg::StartDone {
+        id,
+        result: Err("codex didn't start: command not found".into()),
+    });
+    let s = render(&mut d, 150, 40);
+    assert!(s.contains("couldn't start"), "{s}");
+    assert!(s.contains("command not found"), "{s}");
+    assert!(s.contains("try again"), "{s}");
+    d.on_key(ch_key('r'));
+    assert!(matches!(d.starting[0].state, StartState::Running));
+    // x on it while it runs: gone, and its answer changes nothing
+    d.on_key(ch_key('x'));
+    assert!(d.starting.is_empty() && d.start_gone.len() == 1);
+    assert!(matches!(d.mode, Mode::Normal));
+    d.on_bg(Bg::StartDone {
+        id,
+        result: Ok(("b31:w1:p70".into(), "late".into())),
+    });
+    assert!(d.starting.is_empty() && d.start_gone.is_empty());
+    // moved on while it started: the selection stays where it went
+    let id = begin(
+        &mut d,
+        "b31",
+        NewOpts {
+            agent: "claude".into(),
+            ..Default::default()
+        },
+        false,
+    );
+    let other = fleet::RowId::Host("gpu2".into());
+    fleet::select(&mut d, other.clone());
+    let first = d.fleet.host("b31").unwrap().sessions[0].clone();
+    d.on_bg(Bg::StartDone {
+        id,
+        result: Ok((format!("b31:{}", first.pane_id), first.name.clone())),
+    });
+    assert!(d.starting.is_empty());
+    assert_eq!(d.fv.sel, Some(other));
+    // an answer nobody can see in a listing is a failure, not a silent nothing
+    let id = begin(
+        &mut d,
+        "b31",
+        NewOpts {
+            agent: "claude".into(),
+            ..Default::default()
+        },
+        false,
+    );
+    d.starting[0].state = StartState::Listing(
+        "b31:w1:p404".into(),
+        std::time::Instant::now() - std::time::Duration::from_secs(60),
+    );
+    super::quick::settle(&mut d);
+    assert!(matches!(d.starting[0].state, StartState::Failed(_)));
+    assert_eq!(d.starting[0].id, id);
 }
 
 /// More options carries the folder that was picked, and the agent.

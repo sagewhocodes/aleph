@@ -53,6 +53,8 @@ pub struct Session {
     pub done_seq: u64,
     /// `interactive_ready`: the agent can take input right now
     pub ready: Option<bool>,
+    /// `launch_pending`: herdr is still starting the agent in this pane
+    pub launch_pending: bool,
     /// the agent's own conversation id (`agent_session.value`), for resuming it
     pub native_id: Option<String>,
     /// compacting its conversation, as its screen says (filled in by the fleet)
@@ -296,9 +298,33 @@ pub fn parse_worktrees(v: &Value) -> Vec<Worktree> {
         .collect()
 }
 
+/// Where a start leaves its panes (`NewOpts::panes_out`).
+pub type PanesOut = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+/// Half-second looks a typed command gets to show it has started.
+const TYPED_CHECKS: usize = 8;
+
+/// The line where a shell says it couldn't run `what`, if there is one.
+fn couldnt_run<'a>(screen: &'a str, what: &str) -> Option<&'a str> {
+    const SAID: [&str; 5] = [
+        "not found",
+        "no such file",
+        "permission denied",
+        "cannot execute",
+        "unknown command",
+    ];
+    screen.lines().rev().map(str::trim).find(|l| {
+        let low = l.to_lowercase();
+        low.contains(&what.to_lowercase()) && SAID.iter().any(|s| low.contains(s))
+    })
+}
+
 /// Where a new session goes and how it starts.
 #[derive(Clone, Debug, Default)]
 pub struct NewOpts {
+    /// filled with the new tab's panes as soon as they exist, before the agent
+    /// is up (the dashboard's starting row stands in for them till then)
+    pub panes_out: Option<PanesOut>,
     pub dir: Option<Vec<u8>>,
     /// extra arguments for the agent
     pub args: Vec<String>,
@@ -1267,10 +1293,32 @@ impl Herdr {
         self.run_agent(name, exe, pane, args)
     }
 
+    /// A command typed into a shell can fail where nobody sees it. It gets a
+    /// few seconds: something other than the shell in the foreground means it
+    /// runs. It only counts as failed when the shell itself says so, naming it:
+    /// a slow shell start looks just the same, and that tab mustn't be closed.
+    /// herdr not saying (an older one) counts as started.
+    fn typed_started(&self, pane: &str, what: &str) -> Result<(), String> {
+        let id = [pane.to_string()];
+        for _ in 0..TYPED_CHECKS {
+            std::thread::sleep(Duration::from_millis(500));
+            match self.foreground_many(&id).get(pane) {
+                Some(None) => {}
+                _ => return Ok(()),
+            }
+            let screen = self.read_pane(pane, 8).unwrap_or_default();
+            if let Some(l) = couldnt_run(&screen, what) {
+                return Err(format!("{what} didn't start: {}", crate::sentlog::scrub(l)));
+            }
+        }
+        Ok(())
+    }
+
     /// Type `exe args…` into the pane's shell, then name the agent once herdr sees it.
     fn run_agent(&self, name: &str, exe: &str, pane: &str, args: &[String]) -> Result<(), String> {
         let cmd = crate::agents::command_line(exe, args);
         self.call_s(&["pane", "run", pane, &cmd])?;
+        self.typed_started(pane, exe)?;
         // herdr may not know this agent by its process: give the sidebar its name
         if let Some(a) = crate::agents::find(exe) {
             let _ = self.display_agent(pane, a.name);
@@ -1304,6 +1352,7 @@ impl Herdr {
         let kind = reg.and_then(|r| r.kind).unwrap_or(agent);
         let cmd = Self::wrapped_command(kind, wrapper, &crate::agents::command_line(exe, args));
         self.call_s(&["pane", "run", pane, &cmd])?;
+        self.typed_started(pane, prog)?;
         let _ = self.display_agent(pane, reg.map_or(agent, |r| r.name));
         let _ = self.rename_agent_later(pane, name);
         Ok(())
@@ -1622,6 +1671,9 @@ impl Herdr {
             )
         };
 
+        if let Some(out) = &o.panes_out {
+            *out.lock().unwrap_or_else(|e| e.into_inner()) = panes.clone();
+        }
         if let Some(n) = &note {
             // said three ways: the log, the start's progress, the Inbox
             crate::log::warn("openrouter", n);
@@ -1645,45 +1697,55 @@ impl Herdr {
             .filter(|w| !w.is_empty());
         let mut out = Vec::new();
         let mut hues = hues_in_use;
-        for (i, (pane, name)) in panes.iter().zip(picked.iter()).enumerate() {
-            step(
-                2,
-                if n > 1 {
-                    format!("Starting {shown} {}/{n} · {name}", i + 1)
-                } else {
-                    format!("Starting {shown} as {name}")
-                },
-            );
-            let (hue, mark) = theme::pick_hue(&hues, names::seed() ^ i as u64);
-            hues.push(hue.to_string());
-            let _ = self.report_tokens(pane, &[("mark", mark), ("hue", hue), ("name", name)]);
-            if let Some(h) = &o.pre_hook {
-                self.call_s(&["pane", "run", pane, h])?;
-            }
-            let mut args = o.args.clone();
-            if let Some(p) = &o.prompt {
-                args.push(p.clone());
-            }
-            // `shell`: just the tab, no agent in it
-            if kind != crate::agents::SHELL {
-                match &wrapper {
-                    Some(w) => self.run_wrapped(name, kind, w, pane, &args)?,
-                    None => self.start_agent(name, kind, pane, &args)?,
+        let mut start_all = || -> Result<(), String> {
+            for (i, (pane, name)) in panes.iter().zip(picked.iter()).enumerate() {
+                step(
+                    2,
+                    if n > 1 {
+                        format!("Starting {shown} {}/{n} · {name}", i + 1)
+                    } else {
+                        format!("Starting {shown} as {name}")
+                    },
+                );
+                let (hue, mark) = theme::pick_hue(&hues, names::seed() ^ i as u64);
+                hues.push(hue.to_string());
+                let _ = self.report_tokens(pane, &[("mark", mark), ("hue", hue), ("name", name)]);
+                if let Some(h) = &o.pre_hook {
+                    self.call_s(&["pane", "run", pane, h])?;
                 }
-                // its first prompt, for the journal (`sentlog.rs`)
+                let mut args = o.args.clone();
                 if let Some(p) = &o.prompt {
-                    crate::sentlog::record(&self.ssh, pane, name, p);
+                    args.push(p.clone());
                 }
+                // `shell`: just the tab, no agent in it
+                if kind != crate::agents::SHELL {
+                    match &wrapper {
+                        Some(w) => self.run_wrapped(name, kind, w, pane, &args)?,
+                        None => self.start_agent(name, kind, pane, &args)?,
+                    }
+                    // its first prompt, for the journal (`sentlog.rs`)
+                    if let Some(p) = &o.prompt {
+                        crate::sentlog::record(&self.ssh, pane, name, p);
+                    }
+                }
+                out.push(Started {
+                    name: name.clone(),
+                    label: label.clone(),
+                    pane: pane.clone(),
+                    hue: hue.to_string(),
+                    mark: mark.to_string(),
+                    dir: dir.clone(),
+                    note: if i == 0 { note.clone() } else { None },
+                });
             }
-            out.push(Started {
-                name: name.clone(),
-                label: label.clone(),
-                pane: pane.clone(),
-                hue: hue.to_string(),
-                mark: mark.to_string(),
-                dir: dir.clone(),
-                note: if i == 0 { note.clone() } else { None },
-            });
+            Ok(())
+        };
+        // it didn't start: its tab doesn't stay behind, an empty shell nobody asked for
+        if let Err(e) = start_all() {
+            for p in &panes {
+                let _ = self.close_pane(p);
+            }
+            return Err(e);
         }
         Ok((out, panes))
     }
@@ -2164,6 +2226,10 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
                 .unwrap_or(0),
             done_seq: m.get("completion_seq").and_then(Value::as_u64).unwrap_or(0),
             ready: m.get("interactive_ready").and_then(Value::as_bool),
+            launch_pending: m
+                .get("launch_pending")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             native_id: m
                 .get("agent_session")
                 .and_then(|a| a.get("value").or(Some(a)))
@@ -2434,6 +2500,25 @@ pub fn base_label(l: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use super::couldnt_run;
+
+    #[test]
+    fn a_typed_command_failed_only_if_the_shell_names_it() {
+        for line in [
+            "zsh: command not found: crush",
+            "bash: crush: command not found",
+            "sh: 1: crush: not found",
+            "fish: Unknown command: crush",
+            "bash: /opt/crush: Permission denied",
+        ] {
+            let screen = format!("\n$ crush\n{line}\n$ \n");
+            assert_eq!(couldnt_run(&screen, "crush"), Some(line), "{line}");
+        }
+        // someone else's noise from the shell's start, or just a slow start
+        assert_eq!(couldnt_run("nvm: command not found\n$ ", "crush"), None);
+        assert_eq!(couldnt_run("", "crush"), None);
+        assert_eq!(couldnt_run("$ crush --help\n", "crush"), None);
+    }
 
     #[test]
     fn a_pane_is_at_its_prompt_only_when_the_shell_has_the_foreground() {
@@ -2749,6 +2834,7 @@ mod tests {
         let agents = serde_json::json!({"result": {"agents": [
             {"pane_id": "w1:p2", "tab_id": "w1:t2", "agent": "claude", "agent_status": "blocked",
              "state_change_seq": 41, "completion_seq": 7, "interactive_ready": true,
+             "launch_pending": true,
              "agent_session": {"agent": "claude", "kind": "id", "source": "x", "value": "5f0c-uuid"}}
         ]}});
         let v = parse_sessions(
@@ -2757,6 +2843,7 @@ mod tests {
             &crate::agents::Filter::parse("all").unwrap(),
         );
         assert_eq!((v[0].seq, v[0].done_seq, v[0].ready), (41, 7, Some(true)));
+        assert!(v[0].launch_pending);
         assert_eq!(v[0].native_id.as_deref(), Some("5f0c-uuid"));
         assert_eq!(v[0].state_key(), "blocked#41");
         let mut w = v[0].clone();
