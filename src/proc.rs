@@ -713,13 +713,22 @@ mod tests {
         let mut got: Vec<String> = Vec::new();
         let t = Instant::now();
         // a dev server: says it's ready, then waits forever; ctrl+c ends it
+        let mut server = Command::new("sh");
+        server.args([
+            "-c",
+            "trap 'echo bye; exit 0' INT; echo ready; while :; do sleep 0.05; done",
+        ]);
+        // run in a shell's background (`cargo test &`) this inherits SIGINT ignored, and
+        // a shell can't trap what it was started ignoring
+        // SAFETY: signal is async-signal-safe; run between fork and exec
+        unsafe {
+            server.pre_exec(|| {
+                libc::signal(libc::SIGINT, libc::SIG_DFL);
+                Ok(())
+            });
+        }
         let o = stream_until(
-            Command::new("sh").args([
-                "-c",
-                // no child in the loop: bash drops a trapped SIGINT that lands while a
-                // foreground child runs, and macOS's sh is bash
-                "trap 'echo bye; exit 0' INT; echo ready; while :; do :; done",
-            ]),
+            &mut server,
             Duration::from_secs(20),
             None,
             |l| {
