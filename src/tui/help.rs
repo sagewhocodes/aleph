@@ -265,8 +265,12 @@ pub(crate) fn entries(d: &Dash) -> Vec<Entry> {
         v.push(e(k, &format!("{label} — {cmd}"), "Your actions", run));
     }
     for (k, w) in [
-        ("]", "Focus: the next session"),
-        ("[", "Focus: the previous session"),
+        ("]", "Focus, Tile: the next session, on any machine"),
+        ("[", "Focus, Tile: the previous session, on any machine"),
+        ("ctrl+]", "Focus, Tile: the next machine (or ))"),
+        ("ctrl+[", "Focus, Tile: the previous machine (or ()"),
+        ("alt+.", "typing: the next session"),
+        ("alt+,", "typing: the previous session"),
         ("}", "Focus: the next session that needs you"),
         ("{", "Focus: the previous session that needs you"),
         ("hjkl", "move between panes (or ctrl+w hjkl, ctrl+b arrows)"),
@@ -627,7 +631,15 @@ pub(crate) fn lines(d: &Dash) -> Vec<Line<'static>> {
     for (k, w) in [
         (
             "[ ] · { }",
-            "Focus: next · previous session; next · previous that needs you",
+            "previous · next session, on any machine; Focus: previous · next that needs you",
+        ),
+        (
+            "ctrl+[ ] · ( )",
+            "previous · next machine (( ) where a terminal can't tell ctrl+[ from esc)",
+        ),
+        (
+            "alt+, alt+.",
+            "typing: previous · next session (or the prefix and [ ])",
         ),
         ("esc", "back to where you opened it from"),
         (
@@ -652,8 +664,8 @@ pub(crate) fn lines(d: &Dash) -> Vec<Line<'static>> {
         ),
         ("z · x · space", "zoom · close pane · next layout"),
         (
-            "c · [ ] · ,",
-            "new window · previous/next window (outside Focus) · rename",
+            "c · w W · ,",
+            "new window · next / previous window · rename",
         ),
         ("< > - + =", "resize · equalise (mouse: drag a divider)"),
         (
@@ -672,14 +684,17 @@ pub(crate) fn lines(d: &Dash) -> Vec<Line<'static>> {
         "⇥ · ←→".into(),
         "the next view (overview, processes, usage, …)",
     ));
-    v.push(row("[ ] · ↑↓".into(), "pick a machine"));
+    v.push(row(
+        "[ ] · ctrl+[ ] · ( ) · ↑↓".into(),
+        "pick a machine (Timeline: [ ] a session)",
+    ));
     v.push(row(
         "t".into(),
         "Timeline: every session's states over the last hours (+ - hours · e ended · enter Focus); earlier conversations by project; the selected one's tree beside it",
     ));
     v.push(row(
         "t · esc".into(),
-        "the tree's keys: j k · enter fold · ← → · z Z all · [ ] prompts · e next error · f follow · w words · o smart / open / folded",
+        "the tree's keys: j k · enter fold · ← → · z Z all · ( ) prompts · e next error · f follow · w words · o smart / open / folded",
     ));
     v.push(Line::raw(""));
     v.push(head(&format!(

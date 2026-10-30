@@ -309,25 +309,43 @@ fn move_by(d: &mut Dash, delta: isize) {
     select(d, r[i].clone());
 }
 
-fn jump_host(d: &mut Dash, forward: bool) {
-    let r = rows(d);
-    let i = sel_index(d);
-    let found = if forward {
-        r.iter()
-            .enumerate()
-            .skip(i + 1)
-            .find(|(_, x)| matches!(x, RowId::Host(_)))
+/// The next row of a kind, round and round, in the order on screen.
+fn step_to(d: &mut Dash, forward: bool, kind: fn(&RowId) -> bool) {
+    let r = if d.fb.on {
+        super::board::rows(d)
     } else {
-        r.iter()
-            .enumerate()
-            .take(i)
-            .rev()
-            .find(|(_, x)| matches!(x, RowId::Host(_)))
+        rows(d)
     };
-    if let Some((_, x)) = found {
-        let x = x.clone();
+    let n = r.len();
+    if n == 0 {
+        return;
+    }
+    let at = selected(d)
+        .and_then(|s| r.iter().position(|x| *x == s))
+        .unwrap_or(if forward { n - 1 } else { 0 });
+    let found = (1..=n)
+        .map(|i| {
+            if forward {
+                (at + i) % n
+            } else {
+                (at + n - i) % n
+            }
+        })
+        .map(|i| &r[i])
+        .find(|x| kind(x));
+    if let Some(x) = found.cloned() {
         select(d, x);
     }
+}
+
+/// `ctrl+[` `ctrl+]`: the previous / next machine.
+fn jump_host(d: &mut Dash, forward: bool) {
+    step_to(d, forward, |x| matches!(x, RowId::Host(_)));
+}
+
+/// `[` `]`: the previous / next session, whichever machine it's on.
+fn step_session(d: &mut Dash, forward: bool) {
+    step_to(d, forward, |x| matches!(x, RowId::Sess(_)));
 }
 
 fn set_collapsed(d: &mut Dash, host: &str, v: Option<bool>) {
@@ -566,6 +584,8 @@ pub(crate) fn run_act(d: &mut Dash, act: Act) -> Option<Handoff> {
         Act::Down if d.fb.on => super::board::move_by(d, 1),
         Act::Up => move_by(d, -1),
         Act::Down => move_by(d, 1),
+        Act::PrevSession => step_session(d, false),
+        Act::NextSession => step_session(d, true),
         Act::PrevHost => jump_host(d, false),
         Act::NextHost => jump_host(d, true),
         Act::Mark => match sel {

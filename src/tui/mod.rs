@@ -1645,11 +1645,14 @@ impl Dash {
             }
             // Focus / Tile: a question on screen takes its option numbers
             KeyCode::Char(d @ '1'..='9')
-                if self.view == View::Wall && wall::answer_key(self, d) =>
+                if self.view == View::Wall
+                    && !k.modifiers.contains(KeyModifiers::CONTROL)
+                    && wall::answer_key(self, d) =>
             {
                 return None;
             }
-            KeyCode::Char(d @ '1'..='9') => {
+            // (ctrl+5 isn't a view: it's how most terminals send ctrl+])
+            KeyCode::Char(d @ '1'..='9') if !k.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(v) = View::ALL.get((d as u8 - b'1') as usize) {
                     self.switch(*v);
                 }
@@ -2942,6 +2945,8 @@ fn in_moshi_session() -> bool {
 pub(crate) enum Act {
     Up,
     Down,
+    PrevSession,
+    NextSession,
     PrevHost,
     NextHost,
     Mark,
@@ -3004,8 +3009,20 @@ pub(crate) enum Act {
 pub(crate) const ACTS: &[(Act, &str, &str, &str)] = &[
     (Act::Up, "up", "k", "move up"),
     (Act::Down, "down", "j", "move down"),
-    (Act::PrevHost, "prev_machine", "[", "previous machine"),
-    (Act::NextHost, "next_machine", "]", "next machine"),
+    (
+        Act::PrevSession,
+        "prev_session",
+        "[",
+        "previous session, on any machine",
+    ),
+    (
+        Act::NextSession,
+        "next_session",
+        "]",
+        "next session, on any machine",
+    ),
+    (Act::PrevHost, "prev_machine", "ctrl+[,(", "previous machine"),
+    (Act::NextHost, "next_machine", "ctrl+],ctrl+5,)", "next machine"),
     (
         Act::Mark,
         "mark",
@@ -3264,7 +3281,9 @@ impl Keys {
             match cfg.get(&format!("key.{name}")) {
                 Some(k) => user.push((*a, k)),
                 None => {
-                    map.insert(def.to_string(), *a);
+                    for k in def.split(',') {
+                        map.insert(k.to_string(), *a);
+                    }
                 }
             }
         }
@@ -3308,6 +3327,21 @@ impl Keys {
 }
 
 /// `j`, `K`, `ctrl+k`, `enter`, `space`, `shift+tab`, `f5` …
+/// The keys that step through machines in the views with no binding table:
+/// ctrl+[ ctrl+] (most terminals send ctrl+] as ctrl+5's byte, and ctrl+[ as
+/// esc unless they can tell them apart), or ( ) where they can't. Some(true):
+/// the next one.
+pub(crate) fn machine_step(k: &KeyEvent) -> Option<bool> {
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    match k.code {
+        KeyCode::Char(']' | '5') if ctrl => Some(true),
+        KeyCode::Char('[') if ctrl => Some(false),
+        KeyCode::Char(')') => Some(true),
+        KeyCode::Char('(') => Some(false),
+        _ => None,
+    }
+}
+
 pub(crate) fn key_str(k: &KeyEvent) -> String {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     let alt = k.modifiers.contains(KeyModifiers::ALT);

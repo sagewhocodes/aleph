@@ -5,7 +5,7 @@
 //! session. The wheel scrolls it, a click folds or opens a row; in Monitor ›
 //! Timeline the keys too: j/k, PgUp/PgDn, enter/space fold, ← → close /
 //! open, z / Z everything, v by session › by prompt › every step (what ran
-//! under each, counted), [ ] prompts, e the next error, f follows the end, w
+//! under each, counted), ( ) prompts, e the next error, f follows the end, w
 //! words (read live from the machine, never kept).
 
 use super::Dash;
@@ -479,7 +479,7 @@ pub(crate) fn key(d: &mut Dash, k: &KeyEvent) -> bool {
                 }
             }
         }
-        KeyCode::Char(']') => {
+        KeyCode::Char(')') => {
             if let Some(i) = all
                 .iter()
                 .enumerate()
@@ -490,7 +490,7 @@ pub(crate) fn key(d: &mut Dash, k: &KeyEvent) -> bool {
                 goto(d, i);
             }
         }
-        KeyCode::Char('[') => {
+        KeyCode::Char('(') => {
             if let Some(i) = all
                 .iter()
                 .enumerate()
@@ -557,7 +557,7 @@ pub(crate) fn hints() -> Vec<(&'static str, &'static str)> {
         ("enter", "fold"),
         ("z Z", "all"),
         ("v", "by session · prompt · step"),
-        ("[ ]", "prompts"),
+        ("( )", "prompts"),
         ("e", "next error"),
         ("f", "follow"),
         ("w", "words"),

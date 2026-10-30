@@ -548,6 +548,13 @@ pub(crate) fn monitor_key(d: &mut Dash, k: KeyEvent) -> bool {
                 d.note("no conversation to show for it: its agent didn't say which (or it's not one Aleph reads)");
             }
         }
+        // [ ]: session by session, round and round
+        KeyCode::Char(']') if n > 0 && super::machine_step(&k).is_none() => {
+            d.tl.sel = (d.tl.sel + 1) % n
+        }
+        KeyCode::Char('[') if n > 0 && super::machine_step(&k).is_none() => {
+            d.tl.sel = (d.tl.sel + n - 1) % n
+        }
         KeyCode::Down | KeyCode::Char('j') => d.tl.sel = (d.tl.sel + 1).min(n.saturating_sub(1)),
         KeyCode::Up | KeyCode::Char('k') => d.tl.sel = d.tl.sel.saturating_sub(1),
         KeyCode::Home => d.tl.sel = 0,
@@ -605,7 +612,8 @@ pub(crate) fn monitor_hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
         return v;
     }
     vec![
-        ("↑↓", "session"),
+        ("↑↓ [ ]", "session"),
+        ("ctrl+[ ]", "machine"),
         ("enter", "focus"),
         ("t", "its timeline"),
         ("+ -", "hours"),

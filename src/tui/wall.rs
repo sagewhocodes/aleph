@@ -853,6 +853,11 @@ fn focus_step(d: &mut Dash, fwd: bool, needy: bool) {
     if Some(&key) == cur.as_ref() {
         return;
     }
+    show_in_focus(d, key);
+}
+
+/// The focused pane shows this session instead.
+fn show_in_focus(d: &mut Dash, key: String) {
     if let Some(id) = d.wall.focus() {
         if let Some(p) = d.wall.panes.get_mut(&id) {
             p.content = Content::Session(key);
@@ -861,6 +866,45 @@ fn focus_step(d: &mut Dash, fwd: bool, needy: bool) {
         }
     }
     d.wall.close_compose();
+}
+
+/// The next machine with sessions: the one waiting for you there, else its first.
+fn focus_machine(d: &mut Dash, fwd: bool) {
+    let cur = d
+        .wall
+        .focus()
+        .and_then(|id| session_of(d, id))
+        .map(|s| s.host.clone());
+    let mut hosts: Vec<String> = Vec::new();
+    for s in d.fleet.sessions() {
+        if !hosts.contains(&s.host) {
+            hosts.push(s.host.clone());
+        }
+    }
+    let n = hosts.len();
+    if n == 0 {
+        d.toast(Level::Info, "no sessions on any machine");
+        return;
+    }
+    let next = match cur.as_ref().and_then(|c| hosts.iter().position(|h| h == c)) {
+        Some(i) if fwd => (i + 1) % n,
+        Some(i) => (i + n - 1) % n,
+        None => 0,
+    };
+    if cur.as_ref() == Some(&hosts[next]) {
+        d.toast(Level::Info, "no other machine has sessions");
+        return;
+    }
+    let on_it: Vec<&Session> = d
+        .fleet
+        .sessions()
+        .into_iter()
+        .filter(|s| s.host == hosts[next])
+        .collect();
+    let pick = on_it.iter().find(|s| s.blocked()).or(on_it.first());
+    if let Some(key) = pick.map(|s| s.key()) {
+        show_in_focus(d, key);
+    }
 }
 
 /// A numbered question on the focused session's screen (`❯ 1. Yes` …), to
@@ -1543,8 +1587,8 @@ fn tmux(k: &KeyEvent) -> Option<Cmd> {
         KeyCode::Char('{') => Cmd::SwapPrev,
         KeyCode::Char('=') | KeyCode::Char('E') => Cmd::Equalize,
         KeyCode::Char('q') => Cmd::Numbers,
-        KeyCode::Char('[') | KeyCode::Esc => Cmd::StopTyping,
-        KeyCode::Char(']') | KeyCode::Char('i') => Cmd::Type,
+        KeyCode::Esc => Cmd::StopTyping,
+        KeyCode::Char('i') => Cmd::Type,
         KeyCode::Char('d') => Cmd::Detach,
         KeyCode::Char('?') => Cmd::Cheats,
         _ => return None,
@@ -1751,8 +1795,15 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
                 }
                 return None;
             }
-            if let Some(c) = tmux(&k) {
-                run(d, c);
+            // the prefix and [ ]: the previous / next session, keys and all
+            match k.code {
+                KeyCode::Char('[') => focus_step(d, false, false),
+                KeyCode::Char(']') => focus_step(d, true, false),
+                _ => {
+                    if let Some(c) = tmux(&k) {
+                        run(d, c);
+                    }
+                }
             }
             return None;
         }
@@ -1784,6 +1835,11 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
     if d.wall.typing {
         if leave_keys(d).contains(&ks) {
             stop_typing(d);
+            return None;
+        }
+        // alt+, alt+.: the previous / next session (every bracket is the agent's)
+        if ks == "alt+," || ks == "alt+." {
+            focus_step(d, ks == "alt+.", false);
             return None;
         }
         // ctrl+k: Aleph's palette, typing or not (the agent never gets it;
@@ -1857,17 +1913,21 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
             run(d, Cmd::SplitStack);
             d.mode = Mode::Palette(super::palette::Palette::sessions_only(d));
         }
-        // Focus: step through sessions (all, or the ones waiting for you)
-        KeyCode::Char(']') if d.wall.in_focus() => focus_step(d, true, false),
-        KeyCode::Char('[') if d.wall.in_focus() => focus_step(d, false, false),
+        // the machines: ctrl+[ ctrl+], ( ) where a terminal can't tell them
+        _ if super::machine_step(&k).is_some() => {
+            focus_machine(d, super::machine_step(&k).unwrap_or(true))
+        }
+        // step through sessions; in Focus the ones waiting for you too
+        KeyCode::Char(']') => focus_step(d, true, false),
+        KeyCode::Char('[') => focus_step(d, false, false),
         KeyCode::Char('}') if d.wall.in_focus() => focus_step(d, true, true),
         KeyCode::Char('{') if d.wall.in_focus() => focus_step(d, false, true),
         KeyCode::Char('o') => run(d, Cmd::Next),
         KeyCode::Char('x') => run(d, Cmd::Close),
         KeyCode::Char('z') => run(d, Cmd::Zoom),
         KeyCode::Char('c') => run(d, Cmd::NewWindow),
-        KeyCode::Char(']') => run(d, Cmd::NextWindow),
-        KeyCode::Char('[') => run(d, Cmd::PrevWindow),
+        KeyCode::Char('w') => run(d, Cmd::NextWindow),
+        KeyCode::Char('W') => run(d, Cmd::PrevWindow),
         KeyCode::Char(',') => run(d, Cmd::Rename),
         KeyCode::Char(' ') => run(d, Cmd::NextLayout),
         KeyCode::Char('}') => run(d, Cmd::SwapNext),
@@ -2457,7 +2517,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
             ("i", "message"),
             ("y", "approve"),
             ("t", "timeline"),
-            ("[ ]", "next"),
+            ("[ ]", "session"),
             ("{ }", "needs you"),
             ("O", "new tab"),
             ("a", "attach"),
@@ -2650,7 +2710,8 @@ fn which_key(d: &Dash, f: &mut Frame, r: Rect, p: Pending) {
             (", &", "rename · close window"),
             ("space { }", "layout · swap"),
             ("= q", "equalise · numbers"),
-            ("[ ]", "stop · start typing"),
+            ("[ ]", "session"),
+            ("esc i", "stop · start typing"),
             ("d", "back"),
             ("?", "every key"),
         ],
@@ -3181,7 +3242,16 @@ pub(crate) fn cheatsheet(d: &Dash, f: &mut Frame, area: Rect) {
         row("< > - +  =", "resize · equalise"),
         row("space", "next layout"),
         row("{ }", "swap panes"),
-        row("c · [ ]", "new window · previous / next (Focus: sessions)"),
+        row("[ ]", "the previous / next session, on any machine"),
+        row(
+            "ctrl+[ ] · ( )",
+            "the previous / next machine (( ) where a terminal can't tell ctrl+[ from esc)",
+        ),
+        row(
+            "alt+, alt+.",
+            "typing: the previous / next session (or the prefix and [ ])",
+        ),
+        row("c · w W", "new window · next / previous"),
         row("{ }", "Focus: next · previous that needs you"),
         row(", · #", "rename window · pane numbers"),
         row("digits · tab", "other views"),

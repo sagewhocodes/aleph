@@ -169,12 +169,10 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
     match k.code {
         KeyCode::Left | KeyCode::Char('h') => sub_step(d, false),
         KeyCode::Right | KeyCode::Char('l') => sub_step(d, true),
-        KeyCode::Char(']') => {
-            d.mon.sel = (d.mon.sel + 1) % n;
-            super::usage::machine_changed(d);
-        }
-        KeyCode::Char('[') => {
-            d.mon.sel = (d.mon.sel + n - 1) % n;
+        // ctrl+[ ctrl+] ( ) on every page; [ ] where there are no sessions to step
+        _ if super::machine_step(&k).is_some() || matches!(k.code, KeyCode::Char('[' | ']')) => {
+            let next = super::machine_step(&k).unwrap_or(k.code == KeyCode::Char(']'));
+            d.mon.sel = (d.mon.sel + if next { 1 } else { n - 1 }) % n;
             super::usage::machine_changed(d);
         }
         KeyCode::Down | KeyCode::Char('j') => d.mon.sel = (d.mon.sel + 1) % n,

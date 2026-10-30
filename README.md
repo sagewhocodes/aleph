@@ -100,6 +100,7 @@ aleph doctor                         # check everything
 | `w` · `y` | Tile · approve |
 | `ctrl+a` · `ctrl+k` | Approvals · palette |
 | `ctrl+q` | Keys back to Aleph, then back to Fleet |
+| `[ ]` · `ctrl+[ ]` | Previous / next session, on any machine · machine (or `( )`) |
 | `?` | Every key |
 
 ## 💻 From the shell

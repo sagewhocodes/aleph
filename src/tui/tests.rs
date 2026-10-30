@@ -185,7 +185,7 @@ fn fleet_rows_and_selection() {
         fleet::selected(&d),
         Some(fleet::RowId::Sess("b31|w1:p2".into()))
     );
-    d.on_key(k(KeyCode::Char(']')));
+    d.on_key(k(KeyCode::Char(')')));
     assert_eq!(fleet::selected(&d), Some(fleet::RowId::Host("gpu2".into())));
     // fold gpu2
     d.on_key(k(KeyCode::Char(' ')));
@@ -2243,7 +2243,7 @@ fn the_dashboard_says_what_it_presents() {
         (p.host.as_deref(), p.pane.as_deref(), p.name.as_deref()),
         (Some("b31"), Some("w1:p1"), Some("ignite"))
     );
-    d.on_key(k(KeyCode::Char(']')));
+    d.on_key(k(KeyCode::Char(')')));
     let p = d.presenting();
     assert_eq!((p.host.as_deref(), p.name), (Some("gpu2"), None));
     wall::focus_on(&mut d, "b31|w1:p2", View::Fleet);
@@ -4421,6 +4421,96 @@ fn the_board_says_why_a_machine_shows_no_gpu() {
     );
     let s = render(&mut d, 200, 60);
     assert!(s.contains("no nvidia-smi or rocm-smi"), "{s}");
+}
+
+/// `[ ]` step through sessions on every machine, `ctrl+[ ]` through machines
+/// (`( )` where a terminal can't tell ctrl+[ from esc), in Fleet and Focus alike.
+#[test]
+fn brackets_step_sessions_and_ctrl_brackets_step_machines() {
+    let mut d = dash_own();
+    let _ = render(&mut d, 120, 30);
+    let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    let sel = |d: &Dash| fleet::selected(d);
+    let sess = |k: &str| Some(fleet::RowId::Sess(k.into()));
+    let host = |h: &str| Some(fleet::RowId::Host(h.into()));
+    // Fleet: over the machine's row to the next machine's session, and round
+    d.fv.sel = sess("b31|w1:p2");
+    d.on_key(k(KeyCode::Char(']')));
+    assert_eq!(sel(&d), sess("gpu2|w1:p4"));
+    d.on_key(k(KeyCode::Char(']')));
+    assert_eq!(sel(&d), sess("b31|w1:p1"));
+    d.on_key(k(KeyCode::Char('[')));
+    assert_eq!(sel(&d), sess("gpu2|w1:p4"));
+    // the machines, however a terminal sends them (ctrl+] arrives as ctrl+5)
+    d.on_key(ctrl(']'));
+    assert_eq!(sel(&d), host("b31"));
+    d.on_key(ctrl('5'));
+    assert_eq!(sel(&d), host("gpu2"));
+    d.on_key(ctrl('['));
+    assert_eq!(sel(&d), host("b31"));
+    d.on_key(k(KeyCode::Char(')')));
+    assert_eq!(sel(&d), host("gpu2"));
+    d.on_key(k(KeyCode::Char('(')));
+    assert_eq!(sel(&d), host("b31"));
+    // Focus, Aleph's keys: the same
+    let cur = |d: &Dash| match d.wall.content_of_focus() {
+        Some(wall::Content::Session(k)) => k.clone(),
+        _ => String::new(),
+    };
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    leave_typing(&mut d);
+    d.on_key(k(KeyCode::Char(']')));
+    assert_eq!(cur(&d), "b31|w1:p2");
+    d.on_key(ctrl(']'));
+    assert_eq!(cur(&d), "gpu2|w1:p4", "the next machine");
+    d.on_key(k(KeyCode::Char('(')));
+    assert_eq!(cur(&d), "b31|w1:p2", "the one waiting for you there");
+    // typing: brackets are the agent's; alt+. alt+, and the prefix step instead
+    d.on_key(k(KeyCode::Char('I')));
+    assert!(d.wall.typing);
+    d.on_key(k(KeyCode::Char(']')));
+    d.on_key(ctrl(']'));
+    assert_eq!(cur(&d), "b31|w1:p2", "the agent's");
+    d.on_key(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
+    assert_eq!(cur(&d), "gpu2|w1:p4");
+    d.on_key(KeyEvent::new(KeyCode::Char(','), KeyModifiers::ALT));
+    assert_eq!(cur(&d), "b31|w1:p2");
+    d.on_key(ctrl('b'));
+    d.on_key(k(KeyCode::Char(']')));
+    assert_eq!(cur(&d), "gpu2|w1:p4");
+    assert!(d.wall.typing, "the keys stay with the pane");
+    leave_typing(&mut d);
+    d.on_key(k(KeyCode::Esc));
+    // Tile: the focused pane steps too, and w W move between windows
+    wall::tile(
+        &mut d,
+        vec!["b31|w1:p1".into(), "gpu2|w1:p4".into()],
+        View::Fleet,
+    );
+    d.on_key(k(KeyCode::Char(']')));
+    assert_eq!(cur(&d), "b31|w1:p2");
+    let (win, windows) = (d.wall.cur, d.wall.windows.len());
+    assert!(windows > 1, "Focus's and Tile's");
+    d.on_key(k(KeyCode::Char('w')));
+    assert_ne!(d.wall.cur, win);
+    d.on_key(k(KeyCode::Char('W')));
+    assert_eq!(d.wall.cur, win);
+    // Monitor: machines; Timeline's [ ] walks its sessions, ctrl+] its machines
+    d.switch(View::Monitor);
+    d.mon.sub = monitor_draw::Sub::Overview;
+    d.mon.sel = 0;
+    d.on_key(k(KeyCode::Char(']')));
+    assert_eq!(d.mon.sel, 1);
+    d.on_key(ctrl(']'));
+    assert_eq!(d.mon.sel, 0);
+    d.mon.sub = monitor_draw::Sub::Timeline;
+    let _ = render(&mut d, 120, 30);
+    let at = d.tl.sel;
+    d.on_key(k(KeyCode::Char(']')));
+    assert_ne!(d.tl.sel, at, "a session");
+    assert_eq!(d.mon.sel, 0, "not a machine");
+    d.on_key(ctrl(']'));
+    assert_eq!(d.mon.sel, 1);
 }
 
 /// ctrl+q: the keys back, then Fleet. ctrl+] is the agent's now, and the prefix

@@ -9,6 +9,8 @@
 const SHORT: &[(&str, &str)] = &[
     ("up", "previous session"),
     ("down", "next session"),
+    ("prev_session", "previous session"),
+    ("next_session", "next session"),
     ("prev_machine", "previous machine"),
     ("next_machine", "next machine"),
     ("mark", "mark"),
