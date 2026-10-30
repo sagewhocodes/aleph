@@ -607,6 +607,18 @@ impl State {
     pub(crate) fn win(&self) -> Option<&Window> {
         self.windows.get(self.cur)
     }
+    /// Does this window have anything in it? Empty panes alone don't count.
+    fn has_content(&self, w: &Window) -> bool {
+        w.root.leaves().iter().any(|id| {
+            self.panes
+                .get(id)
+                .is_some_and(|p| p.content != Content::Empty)
+        })
+    }
+    /// Is there anything open to come back to?
+    pub(crate) fn anything_open(&self) -> bool {
+        self.windows.iter().any(|w| self.has_content(w))
+    }
     fn win_mut(&mut self) -> Option<&mut Window> {
         self.windows.get_mut(self.cur)
     }
@@ -712,6 +724,13 @@ fn load(st: &mut State) -> bool {
             continue;
         };
         let leaves = root.leaves();
+        // a window that came to hold nothing isn't worth coming back to
+        if !leaves
+            .iter()
+            .any(|id| w.pointer(&format!("/panes/{id}")).is_some())
+        {
+            continue;
+        }
         for id in &leaves {
             let c = w
                 .pointer(&format!("/panes/{id}"))
@@ -720,8 +739,9 @@ fn load(st: &mut State) -> bool {
                 .unwrap_or(Content::Empty);
             st.panes.insert(
                 *id,
+                // (they existed when saved: gone now means they ended)
                 Pane {
-                    seen: false,
+                    seen: true,
                     content: c,
                     stream: None,
                     want: None,
@@ -1545,6 +1565,7 @@ pub(crate) fn run(d: &mut Dash, cmd: Cmd) {
             w.handmade = true;
         }
     }
+    let was_focus = d.wall.win().is_some_and(|w| w.name == FOCUS);
     let st = &mut d.wall;
     match cmd {
         Cmd::SplitSide | Cmd::SplitStack => {
@@ -1583,14 +1604,9 @@ pub(crate) fn run(d: &mut Dash, cmd: Cmd) {
         Cmd::Close => {
             let alone = st.win().is_some_and(|w| w.root.leaves().len() == 1);
             if alone {
-                if st.windows.len() > 1 {
-                    st.panes.remove(&focus);
-                    st.windows.remove(st.cur);
-                    st.cur = st.cur.min(st.windows.len() - 1);
-                } else if let Some(p) = st.panes.get_mut(&focus) {
-                    p.content = Content::Empty;
-                    p.stream = None;
-                }
+                st.panes.remove(&focus);
+                st.windows.remove(st.cur);
+                st.cur = st.cur.min(st.windows.len().saturating_sub(1));
             } else {
                 if let Some(w) = st.win_mut() {
                     w.root.remove(focus);
@@ -1620,13 +1636,11 @@ pub(crate) fn run(d: &mut Dash, cmd: Cmd) {
             }
         }
         Cmd::CloseWindow => {
-            if st.windows.len() > 1 {
-                for id in st.windows[st.cur].root.leaves() {
-                    st.panes.remove(&id);
-                }
-                st.windows.remove(st.cur);
-                st.cur = st.cur.min(st.windows.len() - 1);
+            for id in st.windows[st.cur].root.leaves() {
+                st.panes.remove(&id);
             }
+            st.windows.remove(st.cur);
+            st.cur = st.cur.min(st.windows.len().saturating_sub(1));
         }
         Cmd::Rename => {
             let n = st.win().map(|w| w.name.clone()).unwrap_or_default();
@@ -1729,6 +1743,13 @@ pub(crate) fn run(d: &mut Dash, cmd: Cmd) {
                     "layout unlocked"
                 },
             );
+        }
+    }
+    // closing what you were in: on from there, never an empty window
+    if matches!(cmd, Cmd::Close | Cmd::CloseWindow) {
+        let left = d.wall.win().is_some_and(|w| d.wall.has_content(w));
+        if was_focus || !left {
+            moved_on(d, was_focus);
         }
     }
     d.wall.dirty = true;
@@ -2526,9 +2547,6 @@ fn open_new(d: &mut Dash, shell: Option<Option<String>>) {
 /// session seen alive, on a machine that's answering: not one still starting,
 /// nor one behind a dropped link.
 pub(crate) fn drop_ended(d: &mut Dash) {
-    if d.view != View::Wall {
-        return;
-    }
     let live: Vec<(u32, bool, bool)> = d
         .wall
         .panes
@@ -2566,7 +2584,8 @@ pub(crate) fn drop_ended(d: &mut Dash) {
     }
 }
 
-/// Take one tile away, whichever window it's in.
+/// Take one tile away, whichever window it's in. A window left with nothing
+/// in it closes too, and if you were looking at it you're taken on from there.
 fn drop_tile(d: &mut Dash, id: u32) {
     let Some(i) = d
         .wall
@@ -2576,22 +2595,12 @@ fn drop_tile(d: &mut Dash, id: u32) {
     else {
         return;
     };
-    let alone = d.wall.windows[i].root.leaves().len() == 1;
-    if alone && d.wall.windows.len() == 1 {
-        d.toast(Level::Info, "the session ended");
-        exit(d);
-        if let Some(p) = d.wall.panes.get_mut(&id) {
-            p.content = Content::Empty;
-            p.stream = None;
-            p.seen = false;
-        }
-        return;
-    }
+    let on_it = i == d.wall.cur;
+    let was_focus = d.wall.windows[i].name == FOCUS;
     d.wall.typing = d.wall.typing && d.wall.focus() != Some(id);
     d.wall.panes.remove(&id);
-    if alone {
+    if d.wall.windows[i].root.leaves().len() == 1 {
         d.wall.windows.remove(i);
-        d.wall.cur = d.wall.cur.min(d.wall.windows.len() - 1);
     } else {
         let w = &mut d.wall.windows[i];
         w.root.remove(id);
@@ -2599,8 +2608,56 @@ fn drop_tile(d: &mut Dash, id: u32) {
             w.focus = w.root.leaves()[0];
         }
         w.zoom = false;
+        if !d.wall.has_content(&d.wall.windows[i]) {
+            close_window_at(&mut d.wall, i);
+        }
     }
+    if i < d.wall.cur {
+        d.wall.cur -= 1;
+    }
+    d.wall.cur = d.wall.cur.min(d.wall.windows.len().saturating_sub(1));
     d.wall.dirty = true;
+    if on_it {
+        d.toast(Level::Info, "the session ended");
+        moved_on(d, was_focus);
+    }
+}
+
+fn close_window_at(st: &mut State, i: usize) {
+    for id in st.windows[i].root.leaves() {
+        st.panes.remove(&id);
+    }
+    st.windows.remove(i);
+}
+
+/// The window you were in has gone. Focus goes back where it came from; so does
+/// anything else with nothing left to show. Otherwise, the next window with
+/// something in it. Leftover empty windows go along the way.
+fn moved_on(d: &mut Dash, was_focus: bool) {
+    if d.wall.win().is_some_and(|w| d.wall.has_content(w)) && !was_focus {
+        return;
+    }
+    if was_focus || !d.wall.anything_open() {
+        let mut i = d.wall.windows.len();
+        while i > 0 {
+            i -= 1;
+            let w = &d.wall.windows[i];
+            if !w.locked && !d.wall.has_content(w) {
+                close_window_at(&mut d.wall, i);
+                if i < d.wall.cur {
+                    d.wall.cur -= 1;
+                }
+            }
+        }
+        d.wall.cur = d.wall.cur.min(d.wall.windows.len().saturating_sub(1));
+        if d.view == View::Wall {
+            exit(d);
+        }
+        return;
+    }
+    if let Some(i) = d.wall.windows.iter().position(|w| d.wall.has_content(w)) {
+        d.wall.cur = i;
+    }
 }
 
 /// A tile showing this output, and its screen (render tests).

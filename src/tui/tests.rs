@@ -3928,6 +3928,91 @@ fn a_session_that_ended_leaves_focus_and_tile() {
     assert!(render(&mut d, 160, 40).contains("this session ended"));
 }
 
+/// An agent or a terminal exits in Focus: the window closes and you're back where
+/// you came from, whatever else is open. Never an empty pane.
+#[test]
+fn exiting_closes_the_window_and_goes_back() {
+    let gone = |d: &mut Dash, pane: &str| {
+        d.fleet
+            .host_mut("b31")
+            .unwrap()
+            .sessions
+            .retain(|s| s.pane_id != pane);
+        wall::drop_ended(d);
+    };
+    // alone: back, and nothing left for Tab to stop on
+    let mut d = dash_own();
+    let _ = render(&mut d, 160, 40);
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    wall::drop_ended(&mut d);
+    gone(&mut d, "w1:p1");
+    assert_eq!(d.view, View::Fleet);
+    assert!(d.wall.windows.is_empty());
+    assert!(!d.wall.anything_open());
+    d.on_key(k(KeyCode::Tab));
+    assert_eq!(d.view, View::Monitor);
+
+    // with an empty window lying around: back too, and that goes as well
+    let mut d = dash_own();
+    let _ = render(&mut d, 160, 40);
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    leave_typing(&mut d);
+    wall::run(&mut d, wall::Cmd::NewWindow);
+    wall::run(&mut d, wall::Cmd::PrevWindow);
+    wall::drop_ended(&mut d);
+    assert_eq!(d.wall.windows.len(), 2);
+    gone(&mut d, "w1:p1");
+    assert_eq!(d.view, View::Fleet);
+    assert!(d.wall.windows.is_empty(), "{:?}", d.wall.windows.len());
+
+    // Focus goes back even with a real window open; that window stays for later
+    let mut d = dash_own();
+    let _ = render(&mut d, 160, 40);
+    wall::tile(
+        &mut d,
+        vec!["b31|w1:p2".to_string(), "gpu2|w1:p3".to_string()],
+        View::Fleet,
+    );
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    wall::drop_ended(&mut d);
+    gone(&mut d, "w1:p1");
+    assert_eq!(d.view, View::Fleet);
+    assert_eq!(d.wall.windows.len(), 1);
+    assert!(d.wall.anything_open());
+
+    // the last session of a split window goes, leaving an empty split: closed
+    let mut d = dash_own();
+    let _ = render(&mut d, 160, 40);
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    leave_typing(&mut d);
+    wall::run(&mut d, wall::Cmd::SplitSide);
+    wall::drop_ended(&mut d);
+    gone(&mut d, "w1:p1");
+    assert_eq!(d.view, View::Fleet);
+    assert!(d.wall.windows.is_empty());
+
+    // x on the only pane: the same (the session lives on)
+    let mut d = dash_own();
+    let _ = render(&mut d, 160, 40);
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    leave_typing(&mut d);
+    let before = d.fleet.host("b31").unwrap().sessions.len();
+    wall::run(&mut d, wall::Cmd::Close);
+    assert_eq!(d.view, View::Fleet);
+    assert!(d.wall.windows.is_empty());
+    assert_eq!(d.fleet.host("b31").unwrap().sessions.len(), before);
+
+    // a session ended while you were in another view: gone when you come back
+    let mut d = dash_own();
+    let _ = render(&mut d, 160, 40);
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    wall::drop_ended(&mut d);
+    d.switch(View::Fleet);
+    gone(&mut d, "w1:p1");
+    assert_eq!(d.view, View::Fleet);
+    assert!(!d.wall.anything_open());
+}
+
 #[test]
 fn a_rows_lead_is_as_wide_as_the_axis_assumes() {
     let d = dash();

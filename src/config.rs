@@ -474,7 +474,7 @@ pub const KNOWN: &[Known] = &[
         key: "close.exited",
         default: "close",
         kind: Kind::Choice(&["close", "keep"]),
-        help: "when an agent exits by itself: close its pane if Aleph opened it and only its shell is left running (close), or leave the pane as a shell (keep)",
+        help: "when an agent or terminal exits by itself: its window closes and you go back where you came from, and its pane closes if Aleph opened it and only its shell is left running (close); or it all stays, saying it ended (keep)",
     },
     Known {
         key: "close.grace",

@@ -2,6 +2,12 @@
 
 ## 2.1.0 — in progress
 
+### Leaving things
+- **When an agent or a terminal exits, its window closes and you go back where you came from.** It used to leave you on an
+  empty pane, or on some other window that happened to be open. `x` on the last pane does the same. `close.exited = keep`
+  leaves it on screen, saying it ended.
+- A window with nothing in it no longer comes back after a restart, and Tab no longer stops on one.
+
 ### Starting things
 - **`n` is one flow, for agents and terminals.** Enter on a place moves to the agent, enter on the agent starts it, and `o`
   does the same and opens it in Focus. Nothing is marked and then left waiting for another key. A terminal is a choice beside

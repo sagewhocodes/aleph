@@ -1223,7 +1223,7 @@ impl Dash {
     /// among them once it's open, after Fleet: the way back to it, keys Aleph's.
     pub(crate) fn view_step(&mut self, fwd: bool) {
         let mut cycle = View::ALL.to_vec();
-        if !self.wall.windows.is_empty() {
+        if self.wall.anything_open() {
             cycle.insert(1, View::Wall);
         }
         let n = cycle.len();
