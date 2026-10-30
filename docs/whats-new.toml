@@ -10,6 +10,23 @@
 # only a build with that feature carries them.
 
 [[entry]]
+id = "2.0.2"
+date = "2026-10-30"
+title = "Usage reads on Linux again; the Inbox counts what it lists"
+notes = [
+  "Usage reads on Linux again: in 2.0.1 a mistake in the log reader stopped Ubuntu and Debian machines recording anything new, while reporting success. Nothing is lost; what they logged is read after this update.",
+  "Usage shows how each machine was last read, and the reason when a read fails.",
+  "The Inbox's count matches its list, and a question that was answered or expired leaves it without a restart.",
+  "A subagent reporting back stays quiet while others are still out; the last report notifies. notify.subagents turns this off.",
+  "A click on another tile focuses it and the keys follow. t in Focus hides the timeline on the first press. The folder you choose in n is the one the session opens in.",
+  "Cmd keys never type a letter into the agent or run a command in Aleph.",
+]
+commits = [
+  "Usage reads on Linux again, and a read that fails says so",
+  "Critical fixes: Inbox counts, subagent noise, tile clicks, the chosen folder",
+]
+
+[[entry]]
 id = "2.0.1"
 date = "2026-10-27"
 title = "Remote machines watched for real; Codex, Antigravity and OpenCode 2 in full"

@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/sagewhocodes/aleph/releases/latest"><img alt="release v2.0.1" src="https://img.shields.io/badge/release-v2.0.1-E2B451"></a>
+  <a href="https://github.com/sagewhocodes/aleph/releases/latest"><img alt="release v2.0.2" src="https://img.shields.io/badge/release-v2.0.2-E2B451"></a>
   <a href="https://github.com/sagewhocodes/aleph/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/sagewhocodes/aleph/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <img alt="macOS · Linux" src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux-1f1f28">
   <img alt="one Rust binary" src="https://img.shields.io/badge/one%20Rust%20binary-1f1f28?logo=rust&logoColor=white">

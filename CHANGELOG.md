@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.0.2 — 2026-10-30
+- **Usage reads on Linux again.** In 2.0.1 a mistake in the log reader made mawk, the default awk on Ubuntu and
+  Debian, refuse it, so those machines recorded no new usage while reporting success. Nothing is lost: what they
+  logged in the meantime is read after updating.
+- A read that fails now says so. Usage shows how each machine was last read, with the reason when it failed.
+- Machines with herdr stopped still get their logs read.
+- The Inbox's count matches what it lists, and a question that was answered or expired leaves a running dashboard.
+- A subagent reporting back no longer notifies while others are still out; the last report does.
+  `notify.subagents` turns this off.
+- A click on another tile focuses it, and the keys follow.
+- `t` in Focus hides the timeline on the first press.
+- The folder you choose in `n` is the one the session opens in, even if the machine's workspaces arrive afterwards.
+- Cmd keys never type a letter into the agent or run a command in Aleph.
+
 ## 2.0.1 — 2026-10-27
 - Pausing a machine (`Z`) asks twice, and a paused machine says so everywhere. The daemon and dashboards
   follow a pause or resume at once.
