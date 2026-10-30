@@ -2098,7 +2098,9 @@ fn keep_history(path: &std::path::Path) {
     );
     if let Ok(rd) = fs::read_dir(&dir) {
         let mut v: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
-        v.sort_by_key(|p| p.metadata().and_then(|m| m.modified()).ok());
+        // each file's time read once: another process saving now would change it
+        // mid-sort, and a sort whose keys move panics
+        v.sort_by_cached_key(|p| p.metadata().and_then(|m| m.modified()).ok());
         while v.len() > 20 {
             let _ = fs::remove_file(v.remove(0));
         }
@@ -2113,7 +2115,7 @@ pub fn history_latest() -> Option<PathBuf> {
         .flatten()
         .map(|e| e.path())
         .collect();
-    v.sort_by_key(|p| p.metadata().and_then(|m| m.modified()).ok());
+    v.sort_by_cached_key(|p| p.metadata().and_then(|m| m.modified()).ok());
     v.pop()
 }
 

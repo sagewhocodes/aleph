@@ -716,7 +716,9 @@ mod tests {
         let o = stream_until(
             Command::new("sh").args([
                 "-c",
-                "trap 'echo bye; exit 0' INT; echo ready; while :; do sleep 0.05; done",
+                // no child in the loop: bash drops a trapped SIGINT that lands while a
+                // foreground child runs, and macOS's sh is bash
+                "trap 'echo bye; exit 0' INT; echo ready; while :; do :; done",
             ]),
             Duration::from_secs(20),
             None,

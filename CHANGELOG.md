@@ -54,6 +54,11 @@
   the hub only. A daemon on another machine keeps its own machine's history and doesn't read the others. `stats = off`, a
   paused machine and `stats_keep_hours = 0` mean no stream.
 
+### A crash fixed
+- **Saving a setting could crash Aleph** if another window or the daemon saved one at the same moment: the list of saved
+  versions was sorted by a time read afresh on every comparison, and a time changing mid-sort is a panic in Rust. Rare, and
+  older than this release.
+
 ### Keys on the timeline
 - **`G` opens the turn view on Monitor's Timeline too,** as it does everywhere else, and `z` `Z` fold or expand every
   turn right there, without opening anything first. Your choice carries to the next conversation you move to.
