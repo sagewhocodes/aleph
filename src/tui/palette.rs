@@ -1,7 +1,9 @@
-//! Command palette (ctrl+k / p): sessions on every machine, machines, views,
-//! actions, presets (`@name`) and recent folders. Each typed word matches on its
-//! own, in any order: "b31 claude" lists Claude Code's sessions on b31. Sessions
-//! say what they are and what they've been doing; ctrl+p pins up to three on top.
+//! Command palette (ctrl+k / p). Before you type: what you pinned (ctrl+p, up to
+//! three), your sessions by machine, a few actions. A session is one aligned
+//! line: name, agent, the model for agents that run on any, state, and how long
+//! while it works. Type and everything else is there too (machines, views, pages,
+//! every command, presets, folders): each word matches on its own, in any order,
+//! so "b31 claude" lists Claude Code's sessions on b31.
 
 use super::fleet::RowId;
 use super::forms::{Field, Res};
@@ -15,6 +17,8 @@ use std::time::{Duration, Instant};
 
 /// Sessions on top of the palette, at most.
 const MAX_PINS: usize = 3;
+/// The longest name a session's line gives room to.
+const MAX_NAME: usize = 26;
 /// What a session gets over anything else in a search: about one letter's worth.
 const SESSION_LEAD: i32 = 20;
 /// Untitled sessions a machine's screens are read for, on one open.
@@ -172,6 +176,46 @@ pub(crate) struct Palette {
     split: bool,
     /// opened in Focus or Tile
     in_wall: bool,
+    /// what each session's line shows, by its key
+    rows: std::collections::HashMap<String, SessionRow>,
+    /// with nothing typed, only these, in this order, under headings (the full
+    /// palette; a picker just lists what it has)
+    shelf: Option<Vec<usize>>,
+}
+
+/// One session's line.
+#[derive(Clone)]
+struct SessionRow {
+    glyph: String,
+    glyph_col: Color,
+    name: String,
+    kind: String,
+    agent: String,
+    model: String,
+    host: String,
+    host_col: Color,
+    state: String,
+    state_col: Color,
+    pinned: bool,
+    /// what it's been doing, said under the list for the one you're on
+    trail: String,
+}
+
+/// Where a line sits with nothing typed.
+#[derive(Clone, Copy, PartialEq)]
+enum Part {
+    Top,
+    Pinned,
+    Sessions,
+    Actions,
+}
+
+/// The columns of the sessions on show.
+struct Widths {
+    name: usize,
+    agent: usize,
+    model: usize,
+    host: usize,
 }
 
 /// What a pin is saved as: the machine and the session's name, which outlast
@@ -227,6 +271,10 @@ pub(crate) fn toggle_pin(d: &mut Dash, p: &mut Palette) {
         saved = here;
     }
     super::settings::save(d, "palette.pins", &saved.join(","));
+    // (a picker keeps its list: the pin shows next time)
+    if p.shelf.is_none() {
+        return;
+    }
     let (q, sel, words) = (p.q.clone(), p.sel, p.words);
     let at = p
         .items
@@ -289,13 +337,68 @@ pub(crate) fn on_trail(d: &mut Dash, key: String, line: String) {
     if !matches!(d.mode, Mode::Palette(_)) {
         return;
     }
-    let sub = super::fleet::session(d, &key).map(|s| session_sub(d, &s));
+    let s = super::fleet::session(d, &key);
+    let sub = s.as_ref().map(|s| session_sub(d, s));
+    let trail = s.as_ref().map(|s| trail_of(d, s)).unwrap_or_default();
     if let (Mode::Palette(p), Some(sub)) = (&mut d.mode, sub) {
         for it in &mut p.items {
             if matches!(&it.0, Item::Session(k) if *k == key) {
                 it.2 = sub.clone();
             }
         }
+        if let Some(r) = p.rows.get_mut(&key) {
+            r.trail = trail;
+        }
+    }
+}
+
+/// What it's been doing: its title, the command it ran, else its screen's last line.
+fn trail_of(d: &Dash, s: &crate::herdr::Session) -> String {
+    let title = s.title.trim();
+    if !title.is_empty() && title != "-" {
+        title.to_string()
+    } else if let Some(r) = d.fleet.commands_of(&s.key()).first() {
+        r.cmd.clone()
+    } else if let Some((_, l)) = d.trails.get(&s.key()) {
+        l.clone()
+    } else {
+        String::new()
+    }
+}
+
+/// Its state, and how long only while it works (or until a limit lifts).
+fn state_of(d: &Dash, s: &crate::herdr::Session) -> (String, Color) {
+    let (st, col) = super::fleet::status_for(d, s);
+    let text = if s.limit.is_some() || s.status == "working" {
+        st.replacen(" · ", " ", 1)
+    } else {
+        st.split(" · ").next().unwrap_or(&st).to_string()
+    };
+    (text, col)
+}
+
+/// The model it's on, for an agent that could be on any.
+fn model_of(d: &Dash, s: &crate::herdr::Session) -> String {
+    if !crate::agents::many_models(&s.agent) {
+        return String::new();
+    }
+    super::usage::live_for(d, s)
+        .map(|l| crate::timeline::short_model(&l.model))
+        .unwrap_or_default()
+}
+
+/// The actions shown before you type: what you'd reach for here, and what's waiting.
+fn on_the_shelf(item: &Item, here: Option<&str>) -> bool {
+    match item {
+        Item::Restart
+        | Item::LeaveFocus
+        | Item::StopTyping
+        | Item::TerminalHere(..)
+        | Item::Undo
+        | Item::Help
+        | Item::Act(super::Act::Prompts) => true,
+        Item::NewOn(h) => here == Some(h.as_str()),
+        _ => false,
     }
 }
 
@@ -318,16 +421,7 @@ fn session_sub(d: &Dash, s: &crate::herdr::Session) -> String {
     if !model.is_empty() {
         parts.push(model);
     }
-    let title = s.title.trim();
-    let trail = if !title.is_empty() && title != "-" {
-        title.to_string()
-    } else if let Some(r) = d.fleet.commands_of(&s.key()).first() {
-        r.cmd.clone()
-    } else if let Some((_, l)) = d.trails.get(&s.key()) {
-        l.clone()
-    } else {
-        String::new()
-    };
+    let trail = trail_of(d, s);
     if !trail.is_empty() {
         parts.push(trail);
     }
@@ -390,6 +484,8 @@ impl Palette {
             picker: false,
             split: false,
             in_wall: false,
+            rows: Default::default(),
+            shelf: None,
         }
     }
 
@@ -398,6 +494,7 @@ impl Palette {
         let mut p = Palette::new(d);
         p.items
             .retain(|(it, _, _, _)| matches!(it, Item::Preset(_)));
+        p.shelf = None;
         p
     }
 
@@ -410,6 +507,7 @@ impl Palette {
         let mut p = Palette::new(d);
         p.items
             .retain(|(it, _, _, _)| matches!(it, Item::Session(_)));
+        p.shelf = None;
         // or something new in it, on any machine
         if d.view == View::Wall {
             p.picker = true;
@@ -503,11 +601,30 @@ impl Palette {
         // pinned sessions on top of everything, in the order they were pinned
         let pinned = pins(d);
         let mut on_top: Vec<(usize, (Item, String, String, Color))> = Vec::new();
+        let mut session_rows = std::collections::HashMap::new();
         for h in &d.fleet.hosts {
             for s in &h.sessions {
                 let (_, col) = super::fleet::status_for(d, s);
                 let at = pinned.iter().position(|p| *p == pin_of(&h.alias, s));
                 let mark = if at.is_some() { "⚑ " } else { "" };
+                let (state, state_col) = state_of(d, s);
+                session_rows.insert(
+                    s.key(),
+                    SessionRow {
+                        glyph: s.glyph().to_string(),
+                        glyph_col: s.color(),
+                        name: s.display().to_string(),
+                        kind: s.agent.clone(),
+                        agent: crate::agents::short_label(&s.agent),
+                        model: model_of(d, s),
+                        host: h.alias.clone(),
+                        host_col: h.color,
+                        state,
+                        state_col,
+                        pinned: at.is_some(),
+                        trail: trail_of(d, s),
+                    },
+                );
                 let entry = (
                     Item::Session(s.key()),
                     format!("{mark}{} {}", s.glyph(), s.display()),
@@ -532,7 +649,7 @@ impl Palette {
             items.push((
                 Item::NewOn(h.alias.clone()),
                 format!("New session on {}", h.alias),
-                "action".into(),
+                "n · where, then which agent or a terminal".into(),
                 c::ACCENT(),
             ));
             items.push((
@@ -918,12 +1035,19 @@ impl Palette {
             if let Some(first) = title.get_mut(0..1) {
                 first.make_ascii_uppercase();
             }
-            items.push((
-                Item::Act(*a),
-                title,
-                format!("{} · on the selected session", d.keys.key_for(*a)),
-                c::MUTED(),
-            ));
+            // (the one that's on the short list says it shortly)
+            let (title, what) = if *a == super::Act::Prompts {
+                (
+                    "Prompts…".to_string(),
+                    format!("{} · browse, use, edit and save them", d.keys.key_for(*a)),
+                )
+            } else {
+                (
+                    title,
+                    format!("{} · on the selected session", d.keys.key_for(*a)),
+                )
+            };
+            items.push((Item::Act(*a), title, what, c::MUTED()));
         }
         items.push((
             Item::Help,
@@ -931,6 +1055,43 @@ impl Palette {
             "? · searchable, by view".into(),
             c::MUTED(),
         ));
+        // with nothing typed: what you pinned, your sessions, a few actions
+        let here_host =
+            d.fv.selected_host(d)
+                .or_else(|| d.fleet.hosts.first().map(|h| h.alias.clone()));
+        let waiting_now = d.fleet.sessions().iter().any(|s| s.blocked());
+        let of = |want: &dyn Fn(&Item) -> bool| -> Vec<usize> {
+            items
+                .iter()
+                .enumerate()
+                .filter(|(_, it)| want(&it.0))
+                .map(|(i, _)| i)
+                .collect()
+        };
+        let is_pinned = |it: &Item| matches!(it, Item::Session(k) if session_rows.get(k).is_some_and(|r: &SessionRow| r.pinned));
+        let top = |it: &Item| matches!(it, Item::Restart | Item::LeaveFocus | Item::StopTyping);
+        let mut shelf = of(&top);
+        shelf.extend(of(&is_pinned));
+        // (by machine, as the fleet lists them)
+        for h in &d.fleet.hosts {
+            shelf.extend(of(&|it| {
+                !is_pinned(it)
+                    && matches!(it, Item::Session(k) if session_rows.get(k).is_some_and(|r| r.host == h.alias))
+            }));
+        }
+        shelf.extend(of(&|it| {
+            !top(it)
+                && (on_the_shelf(it, here_host.as_deref())
+                    || (waiting_now && matches!(it, Item::Approvals)))
+        }));
+        // the cursor starts on the session you're on: enter is Focus on it
+        let sel = match (&d.fv.sel, d.view) {
+            (Some(RowId::Sess(k)), View::Fleet) => shelf
+                .iter()
+                .position(|i| matches!(&items[*i].0, Item::Session(x) if x == k))
+                .unwrap_or(0),
+            _ => 0,
+        };
         Palette {
             q: Field::default(),
             words: (
@@ -938,15 +1099,123 @@ impl Palette {
                 "sessions, commands, machines, views, @presets, folders…",
             ),
             items,
-            sel: 0,
+            sel,
             picker: false,
             split: false,
             in_wall: d.view == View::Wall,
+            rows: session_rows,
+            shelf: Some(shelf),
+        }
+    }
+
+    /// Where this item sits with nothing typed.
+    fn part_of(&self, i: usize) -> Part {
+        match &self.items[i].0 {
+            Item::Restart | Item::LeaveFocus | Item::StopTyping => Part::Top,
+            Item::Session(k) if self.rows.get(k).is_some_and(|r| r.pinned) => Part::Pinned,
+            Item::Session(_) => Part::Sessions,
+            _ => Part::Actions,
+        }
+    }
+
+    /// The columns for the sessions in this list, in a line `room` wide.
+    fn widths(&self, ranked: &[(usize, Vec<usize>)], room: usize, hosts: bool) -> Widths {
+        let shown: Vec<&SessionRow> = ranked
+            .iter()
+            .filter_map(|(i, _)| match &self.items[*i].0 {
+                Item::Session(k) => self.rows.get(k),
+                _ => None,
+            })
+            .collect();
+        let most = |f: &dyn Fn(&SessionRow) -> usize| shown.iter().map(|r| f(r)).max().unwrap_or(0);
+        let mut w = Widths {
+            name: most(&|r| ui::width(&r.name)).min(MAX_NAME),
+            agent: most(&|r| ui::width(&r.agent)),
+            model: most(&|r| ui::width(&r.model)).min(18),
+            host: if hosts {
+                most(&|r| ui::width(&r.host) + 2)
+            } else {
+                0
+            },
+        };
+        let state = most(&|r| ui::width(&r.state));
+        // the bar and glyph, the agent's icon, the gaps
+        let fixed = 4 + 2 + 2 + 2 + 2 + 2;
+        let need = |w: &Widths| fixed + w.name + w.agent + w.model + w.host + state;
+        if need(&w) > room {
+            w.model = 0;
+        }
+        if need(&w) > room {
+            w.name = w.name.saturating_sub(need(&w) - room).max(8);
+        }
+        w
+    }
+
+    /// A session's line.
+    fn session_line(
+        &self,
+        r: &SessionRow,
+        title_len: usize,
+        pos: &[usize],
+        w: &Widths,
+        on: bool,
+    ) -> Line<'static> {
+        let mut l = vec![
+            Span::styled(if on { "┃ " } else { "  " }, ui::fg(c::ACCENT())),
+            Span::styled(
+                if r.pinned && w.host > 0 {
+                    "⚑ ".to_string()
+                } else {
+                    format!("{} ", r.glyph)
+                },
+                ui::fg(r.glyph_col),
+            ),
+        ];
+        // the name, with what matched picked out (the hay starts with the title)
+        let name = ui::pad(&ui::trunc(&r.name, w.name), w.name);
+        let from = title_len.saturating_sub(r.name.chars().count());
+        for (ci, ch) in name.chars().enumerate() {
+            let st = if pos.contains(&(from + ci)) {
+                ui::fg(c::ACCENT()).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            } else if on {
+                ui::bold()
+            } else {
+                Style::new()
+            };
+            l.push(Span::styled(ch.to_string(), st));
+        }
+        l.push(Span::raw("  "));
+        l.push(crate::icons::agent(&r.kind));
+        l.push(Span::styled(
+            format!(" {}", ui::pad(&r.agent, w.agent)),
+            ui::muted(),
+        ));
+        if w.model > 0 {
+            l.push(Span::styled(
+                format!("  {}", ui::pad(&ui::trunc(&r.model, w.model), w.model)),
+                ui::fg(c::ACCENT()),
+            ));
+        }
+        if w.host > 0 {
+            l.push(Span::styled(
+                format!("  {}", ui::pad(&format!("[{}]", r.host), w.host)),
+                ui::fg(r.host_col),
+            ));
+        }
+        l.push(Span::styled(format!("  {}", r.state), ui::fg(r.state_col)));
+        let line = Line::from(l);
+        if on {
+            line.style(ui::selected())
+        } else {
+            line
         }
     }
 
     fn ranked(&self) -> Vec<(usize, Vec<usize>)> {
         let q = self.q.text.trim();
+        if let (true, Some(shelf)) = (q.is_empty(), &self.shelf) {
+            return shelf.iter().map(|i| (*i, Vec::new())).collect();
+        }
         let mut v: Vec<(i32, usize, Vec<usize>)> = self
             .items
             .iter()
@@ -1034,8 +1303,8 @@ impl Palette {
     }
 
     pub fn draw(&self, f: &mut Frame, area: Rect, _t0: Instant) {
-        let w = 104u16.min(area.width.saturating_sub(2));
-        let h = 18u16.min(area.height.saturating_sub(2));
+        let w = 96u16.min(area.width.saturating_sub(2));
+        let h = 20u16.min(area.height.saturating_sub(2));
         let r = Rect {
             x: area.x + (area.width.saturating_sub(w)) / 2,
             y: area.y + 2,
@@ -1057,12 +1326,58 @@ impl Palette {
             "─".repeat(inner.width as usize),
             ui::fg(c::LINE()),
         )));
-        let room = inner.height.saturating_sub(3) as usize;
+        // the search, the rule, what the one you're on has been doing, the keys
+        let room = inner.height.saturating_sub(4) as usize;
         let ranked = self.ranked();
-        let start = self.sel.saturating_sub(room.saturating_sub(1));
-        for (n, (i, pos)) in ranked.iter().enumerate().skip(start).take(room) {
-            let (_, title, sub, col) = &self.items[*i];
+        let shelf = self.shelf.is_some() && self.q.text.trim().is_empty();
+        let widths = self.widths(&ranked, inner.width as usize, !shelf);
+        let mut body: Vec<Line> = Vec::new();
+        let mut at = 0;
+        let mut part: Option<Part> = None;
+        let mut host: Option<String> = None;
+        for (n, (i, pos)) in ranked.iter().enumerate() {
+            let (item, title, sub, col) = &self.items[*i];
             let on = n == self.sel;
+            let session = match item {
+                Item::Session(k) => self.rows.get(k),
+                _ => None,
+            };
+            if shelf {
+                let this = self.part_of(*i);
+                if part != Some(this) {
+                    part = Some(this);
+                    host = None;
+                    let word = match this {
+                        Part::Top => None,
+                        Part::Pinned => Some("PINNED"),
+                        Part::Sessions => Some("SESSIONS"),
+                        Part::Actions => Some("ACTIONS"),
+                    };
+                    if let Some(word) = word {
+                        body.push(Line::from(Span::styled(
+                            format!(" {word}"),
+                            ui::muted().add_modifier(Modifier::BOLD),
+                        )));
+                    }
+                }
+                // under SESSIONS, a heading for each machine
+                if let (Part::Sessions, Some(r)) = (this, session) {
+                    if host.as_deref() != Some(r.host.as_str()) {
+                        host = Some(r.host.clone());
+                        body.push(Line::from(vec![
+                            Span::styled(" ▌", ui::fg(r.host_col)),
+                            Span::styled(r.host.clone(), ui::fg(r.host_col)),
+                        ]));
+                    }
+                }
+            }
+            if on {
+                at = body.len();
+            }
+            if let Some(r) = session {
+                body.push(self.session_line(r, title.chars().count(), pos, &widths, on));
+                continue;
+            }
             let mut l = vec![Span::styled(
                 if on { "┃ " } else { "  " },
                 ui::fg(c::ACCENT()),
@@ -1071,7 +1386,12 @@ impl Palette {
             let tl = title.chars().count();
             for (ci, ch) in title.chars().enumerate() {
                 let hit = pos.contains(&ci);
-                let mut st = if ci == 0 { ui::fg(*col) } else { Style::new() };
+                // (a leading mark, ▌ or @, takes the entry's colour; words don't)
+                let mut st = if ci == 0 && !ch.is_alphanumeric() {
+                    ui::fg(*col)
+                } else {
+                    Style::new()
+                };
                 if on {
                     st = st.add_modifier(Modifier::BOLD);
                 }
@@ -1100,12 +1420,38 @@ impl Palette {
             if on {
                 line = line.style(ui::selected());
             }
-            lines.push(line);
+            body.push(line);
         }
+        // the one you're on stays in view
+        let start = (at + 1).saturating_sub(room);
+        lines.extend(body.into_iter().skip(start).take(room));
         if ranked.is_empty() {
             lines.push(Line::from(Span::styled("  nothing matches", ui::muted())));
         }
         f.render_widget(Paragraph::new(lines), inner);
+        // what the one you're on has been doing
+        let trail = match self.chosen() {
+            Some(Item::Session(k)) => self.rows.get(&k).map(|r| r.trail.clone()),
+            _ => None,
+        }
+        .unwrap_or_default();
+        if !trail.is_empty() {
+            let line = Rect {
+                y: inner.y + inner.height.saturating_sub(2),
+                height: 1,
+                ..inner
+            };
+            f.render_widget(
+                Paragraph::new(Span::styled(
+                    format!(
+                        "  {}",
+                        ui::trunc(&trail, inner.width.saturating_sub(4) as usize)
+                    ),
+                    ui::faint(),
+                )),
+                line,
+            );
+        }
         // what the keys do on what's under the cursor
         let on_session = matches!(self.chosen(), Some(Item::Session(_)));
         let mut hints = vec![("↑↓", "pick"), ("enter", "go")];

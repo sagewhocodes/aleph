@@ -754,7 +754,10 @@ fn the_palette_finds_a_session_by_machine_and_agent_in_any_order() {
         assert!(key.starts_with("gpu2|"), "{q}: {key}");
     }
     let s = render(&mut d, 150, 40);
-    assert!(s.contains("Claude Code") && s.contains("gpu2"), "{s}");
+    // an agent's short name, its machine, since a search has no headings
+    let row = s.lines().find(|l| l.contains("┃ ")).unwrap_or_default();
+    assert!(s.contains("✻ Claude  [gpu2]"), "{s}");
+    assert!(!row.contains("Claude Code"), "{row}");
     assert!(s.contains("ctrl+p") && s.contains("pin"), "{s}");
     // a session with no title says what its screen last said, once it's read
     let bare = {
@@ -769,6 +772,59 @@ fn the_palette_finds_a_session_by_machine_and_agent_in_any_order() {
     });
     let s = render(&mut d, 150, 40);
     assert!(s.contains("12 tests passed"), "{s}");
+}
+
+/// Before you type: your sessions by machine, one aligned line each, then a few
+/// actions. The rest comes with typing.
+#[test]
+fn ctrl_k_shows_sessions_by_machine_then_a_few_actions() {
+    use crate::usage::dash::{Data, Live};
+    let mut d = dash();
+    let _ = render(&mut d, 150, 40);
+    d.fleet.host_mut("b31").unwrap().sessions[0].since = Some(crate::cache::now() - 20 * 60);
+    // an agent that runs on any model says which; one vendor's doesn't need to
+    {
+        let h = d.fleet.host_mut("gpu2").unwrap();
+        h.sessions[0].agent = "opencode".into();
+        h.sessions[0].native_id = Some("oc1".into());
+    }
+    let mut data = Data::default();
+    data.live.insert(
+        "oc1".into(),
+        Live {
+            model: "kimi-k2.5".into(),
+            ..Default::default()
+        },
+    );
+    d.usage.data = Some(data);
+    d.mode = Mode::Palette(palette::Palette::new(&d));
+    let s = render(&mut d, 150, 40);
+    assert!(s.contains("SESSIONS") && s.contains("ACTIONS"), "{s}");
+    assert!(s.contains("▌b31") && s.contains("▌gpu2"), "{s}");
+    assert!(s.contains("OpenCode") && s.contains("kimi-k2.5"), "{s}");
+    // a few actions, not every machine's and every page
+    assert!(
+        s.contains("New session on") && s.contains("Every key"),
+        "{s}"
+    );
+    assert!(!s.contains("Start Claude Code in a folder"), "{s}");
+    assert!(!s.contains("Go to Monitor"), "{s}");
+    // a duration only while it works, and no stray dots
+    let row = |s: &str, name: &str| {
+        s.lines()
+            .find(|l| l.contains(name))
+            .unwrap_or_else(|| panic!("no {name}: {s}"))
+            .to_string()
+    };
+    assert!(row(&s, "⋅ working").contains("20m"), "{s}");
+    let at_rest = row(&s, "OpenCode");
+    assert!(!at_rest.contains(" · "), "{at_rest}");
+    // typing brings the rest, without the headings
+    d.on_key(k(KeyCode::Char('g')));
+    d.on_key(k(KeyCode::Char('o')));
+    let s = render(&mut d, 150, 40);
+    assert!(!s.contains("SESSIONS"), "{s}");
+    assert!(s.contains("Go to"), "{s}");
 }
 
 /// Every command is in ctrl+k: Fleet's by what it does, Focus's and Tile's while
@@ -1034,7 +1090,7 @@ fn the_palette_pins_three_sessions_on_top() {
         d.mode = Mode::Palette(palette::Palette::new(&d));
         render(&mut d, 150, 40)
     };
-    assert!(s.contains("⚑"), "{s}");
+    assert!(s.contains("PINNED") && s.contains("SESSIONS"), "{s}");
 }
 
 /// One key, and it opens: a terminal in a fixed folder (on the machine you're
@@ -1600,10 +1656,10 @@ fn the_palette_focuses_the_selected_session_and_leaves_focus() {
     let _ = render(&mut d, 160, 30);
     d.fv.sel = Some(fleet::RowId::Sess("b31|w1:p1".into()));
     let ctrl_k = || KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
-    // Fleet: Focus on the selected session comes first
+    // Fleet: the cursor is on the selected session, and enter is Focus on it
     d.on_key(ctrl_k());
     let s = render(&mut d, 160, 30);
-    assert!(s.contains("┃ Focus claude_ignite"), "{s}");
+    assert!(s.contains("┃ ◆ claude_ignite"), "{s}");
     d.on_key(k(KeyCode::Enter));
     assert!(d.view == View::Wall && d.wall.in_focus() && d.wall.typing);
     // in Focus, typing: the ways out come first

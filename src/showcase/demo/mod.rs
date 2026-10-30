@@ -475,6 +475,7 @@ fn to_session(s: &world::Sess) -> Session {
         restore_error: None,
         ready: (!shell).then(|| s.status() != "working"),
         launch_pending: false,
+        shown: String::new(),
         native_id: (!shell).then(|| world::conversation(&s.host, &s.pane)),
     }
 }

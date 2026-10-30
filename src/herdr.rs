@@ -65,6 +65,8 @@ pub struct Session {
     pub plain: bool,
     /// herdr couldn't bring this pane back after a restart: why
     pub restore_error: Option<String>,
+    /// what to call it when its only name is herdr's tab number (`name_the_bare`)
+    pub shown: String,
 }
 
 impl Session {
@@ -73,6 +75,9 @@ impl Session {
     /// without the agent prefix for story names (`claude_smoldering-heron` →
     /// `smoldering-heron`: the creature says the agent already).
     pub fn display(&self) -> &str {
+        if !self.shown.is_empty() {
+            return &self.shown;
+        }
         // (a pane whose tab has no label)
         if self.label.is_empty() {
             return &self.name;
@@ -2240,6 +2245,7 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
             compacted: false,
             plain: false,
             restore_error: None,
+            shown: String::new(),
         });
     }
     // plain shells: panes with no agent (only `api snapshot` lists panes). Those
@@ -2285,7 +2291,46 @@ pub fn parse_sessions(agents: &Value, tabs: &Value, f: &Filter) -> Vec<Session> 
         }
     }
     out.sort_by(|a, b| a.label.cmp(&b.label));
+    name_the_bare(&mut out);
     out
+}
+
+/// A session whose only name is herdr's tab number ("1"), or its pane id, goes by
+/// its folder: `train`, `train 2`. In a home folder or none, by its agent. Only what
+/// it's called on screen: herdr's own name stays, and still finds it.
+fn name_the_bare(v: &mut [Session]) {
+    let is_bare = |s: &Session| {
+        let n = s.display();
+        n.is_empty() || n == s.pane_id || n.chars().all(|c| c.is_ascii_digit())
+    };
+    let mut taken: Vec<String> = v
+        .iter()
+        .filter(|s| !is_bare(s))
+        .map(|s| s.display().to_string())
+        .collect();
+    for s in v.iter_mut().filter(|s| is_bare(s)) {
+        let base = folder_name(&s.cwd).unwrap_or_else(|| crate::agents::short_label(&s.agent));
+        let mut name = base.clone();
+        let mut n = 2;
+        while taken.contains(&name) {
+            name = format!("{base} {n}");
+            n += 1;
+        }
+        taken.push(name.clone());
+        s.shown = name;
+    }
+}
+
+/// The last part of a folder, unless it's a home or the root (that says nothing).
+fn folder_name(cwd: &str) -> Option<String> {
+    let parts: Vec<&str> = cwd.split('/').filter(|p| !p.is_empty()).collect();
+    if !cwd.starts_with('/') {
+        return None;
+    }
+    match parts.as_slice() {
+        [] | ["root"] | ["home", _] | ["Users", _] => None,
+        [.., last] => Some(last.to_string()),
+    }
 }
 
 /// Keys that choose the affirmative answer to a question herdr detected
@@ -2500,7 +2545,48 @@ pub fn base_label(l: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::couldnt_run;
+    use super::{couldnt_run, folder_name, name_the_bare, Session};
+
+    #[test]
+    fn a_session_with_only_a_number_goes_by_its_folder() {
+        let s = |label: &str, cwd: &str, agent: &str| Session {
+            label: label.into(),
+            name: label.into(),
+            cwd: cwd.into(),
+            agent: agent.into(),
+            pane_id: format!("w1:{label}{cwd}"),
+            ..Default::default()
+        };
+        let mut v = vec![
+            s("1", "/srv/train", "claude"),
+            s("2", "/data/train/", "codex"),
+            s("3", "/home/u", "claude"),
+            s("4", "/", "shell"),
+            s("claude_bobbing-wren:train", "/srv/train", "claude"),
+            s("hunt", "/srv/hunt", "claude"),
+            s("5", "/srv/hunt", "codex"),
+        ];
+        name_the_bare(&mut v);
+        let names: Vec<&str> = v.iter().map(Session::display).collect();
+        assert_eq!(
+            names,
+            vec![
+                "train",
+                "train 2",
+                "Claude",
+                "Terminal",
+                "bobbing-wren",
+                "hunt",
+                "hunt 2"
+            ]
+        );
+        // herdr's own name stays: it's how a session is addressed
+        assert_eq!(v[0].name, "1");
+        assert_eq!(folder_name("/Users/u"), None);
+        assert_eq!(folder_name("-"), None);
+        assert_eq!(folder_name("/root"), None);
+        assert_eq!(folder_name("/home/u/x").as_deref(), Some("x"));
+    }
 
     #[test]
     fn a_typed_command_failed_only_if_the_shell_names_it() {
@@ -2745,9 +2831,9 @@ mod tests {
         // beside an agent in its tab: a shell, with why it didn't come back
         let sh = v.iter().find(|s| s.pane_id == "w1:p3").unwrap();
         assert_eq!(sh.restore_error.as_deref(), Some("cwd gone"));
-        // its tab unnamed: its own id names it
+        // its tab unnamed: it's known by its id, and goes by what it is
         let bare = v.iter().find(|s| s.pane_id == "w1:p4").unwrap();
-        assert_eq!((bare.name.as_str(), bare.display()), ("w1:p4", "w1:p4"));
+        assert_eq!((bare.name.as_str(), bare.display()), ("w1:p4", "Terminal"));
         // a machine's standing terminal is known by its name
         let standing = Session {
             label: "shell_ready:home".into(),

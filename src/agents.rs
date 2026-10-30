@@ -489,6 +489,31 @@ pub fn label(kind: &str) -> String {
         .unwrap_or_else(|| "Agent".into())
 }
 
+/// An agent's name, short: `Claude` for Claude Code, `Terminal` for a plain shell.
+pub fn short_label(kind: &str) -> String {
+    if kind == SHELL {
+        return "Terminal".into();
+    }
+    let l = label(kind);
+    let mut s = l.split(" (").next().unwrap_or(&l);
+    for p in ["GitHub ", "Factory "] {
+        s = s.strip_prefix(p).unwrap_or(s);
+    }
+    for x in [" CLI", " Code", " Agent"] {
+        s = s.strip_suffix(x).unwrap_or(s);
+    }
+    s.to_string()
+}
+
+/// Agents that are one vendor's: which model they're on matters less. Every other
+/// one runs on whichever you pick, so a list says which.
+const ONE_VENDOR: &[&str] = &["claude", "codex", "gemini", "kimi", "qwen", "grok"];
+
+/// Is the model worth naming beside this agent?
+pub fn many_models(kind: &str) -> bool {
+    kind != SHELL && !ONE_VENDOR.contains(&kind)
+}
+
 /// Not an agent: a herdr tab with just your shell in it (`aleph local shell`).
 pub const SHELL: &str = "shell";
 
@@ -1072,6 +1097,26 @@ pub(crate) mod tests {
             assert!(by_integration(i).is_some(), "{i}");
         }
         assert_eq!(by_integration("antigravity-cli").unwrap().id, "agy");
+    }
+
+    #[test]
+    fn short_names_and_who_needs_a_model_named() {
+        for (id, short) in [
+            ("claude", "Claude"),
+            ("codex", "Codex"),
+            ("opencode", "OpenCode"),
+            ("omp", "OMP"),
+            ("gemini", "Gemini"),
+            ("copilot", "Copilot"),
+            ("droid", "Droid"),
+            ("kilo", "Kilo"),
+            ("hermes", "Hermes"),
+            ("shell", "Terminal"),
+        ] {
+            assert_eq!(short_label(id), short, "{id}");
+        }
+        assert!(many_models("opencode") && many_models("pi") && many_models("cursor"));
+        assert!(!many_models("claude") && !many_models("codex") && !many_models(SHELL));
     }
 
     #[test]

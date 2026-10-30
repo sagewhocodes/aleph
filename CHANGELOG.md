@@ -2,6 +2,29 @@
 
 ## 2.1.0 — in progress
 
+### ctrl+k
+- **Before you type:** what you pinned, your sessions by machine, a few actions. Type and everything else is there: every
+  command, machines, views, pages, presets, folders.
+- **A session is one aligned line:** its name, the agent's icon and short name, the model for agents that run on any model
+  (OpenCode and the like), its state, and how long only while it works. What it's been doing shows under the list for the
+  one you're on.
+- **Words match in any order, each on its own:** `gpu2 claude` and `claude gpu2` list the same sessions.
+- **`ctrl+p` pins up to three sessions** on top.
+- **In Focus and Tile,** picking a session goes to it, `ctrl+s` adds it as a split, and their own commands and your windows
+  by name are all listed.
+
+### Session names
+- **A session whose only name is herdr's tab number goes by its folder,** everywhere in Aleph: `train`, `train 2`. In a home
+  folder it goes by its agent. Only the name on screen changes: herdr's stays, and still finds it.
+
+### Prompts
+- **A library:** `ctrl+p` outside a text box, or in `ctrl+k`. Browse by scenario and agent, read one whole, use it on the
+  session you're on, edit, add and delete.
+- **Starters** for review, tests, debug, refactor, docs, commit, handoff, explain, plan and security.
+- **A prompt can be for certain agents,** and `<name>-<agent>` is that agent's way of doing it: `@review` in a Codex session
+  uses `review-codex` when there is one.
+- `ctrl+p` works in the new-session form too, and the list in any text box narrows as you type.
+
 ### Timeline
 - **A turn view:** a conversation's prompts, turns and tool calls on the whole screen, with its keys. `t` in Monitor ›
   Timeline, `G` in Focus and `G` again in Fleet, or click "turn view" on any timeline panel.

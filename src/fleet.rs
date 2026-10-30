@@ -1753,7 +1753,7 @@ pub fn session_to_json(s: &Session) -> Value {
         "seq": s.seq, "done_seq": s.done_seq, "ready": s.ready, "native_id": s.native_id,
         "compacting": s.compacting, "compacted": s.compacted,
         "plain": s.plain, "restore_error": s.restore_error,
-        "launch_pending": s.launch_pending,
+        "launch_pending": s.launch_pending, "shown": s.shown,
     })
 }
 
@@ -1789,6 +1789,11 @@ pub(crate) fn session_from_json(v: &Value) -> Option<Session> {
             .unwrap_or(false),
         compacted: v.get("compacted").and_then(Value::as_bool).unwrap_or(false),
         plain: v.get("plain").and_then(Value::as_bool).unwrap_or(false),
+        shown: v
+            .get("shown")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         launch_pending: v
             .get("launch_pending")
             .and_then(Value::as_bool)
