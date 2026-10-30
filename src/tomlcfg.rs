@@ -117,6 +117,7 @@ pub const PATHS: &[(&str, &str)] = &[
     ("approvals.layout", "automation.approvals_layout"),
     ("approvals.group", "automation.approvals_group"),
     ("close.grace", "sessions.close_grace"),
+    ("close.exited", "sessions.close_exited"),
     ("terminal", "sessions.terminal"),
     ("wraps", "wrapper.wraps"),
     ("agent_wrapper", "agents.wrapper"),

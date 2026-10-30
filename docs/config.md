@@ -222,6 +222,7 @@ dashboard's Settings tab edits them. Per-machine settings are `host.<alias>.<key
 
 | Setting | TOML | Default | What it does |
 |---|---|---|---|
+| `close.exited` | `sessions.close_exited` | `close` (close \| keep) | when an agent exits by itself: close its pane if Aleph opened it and only its shell is left running (close), or leave the pane as a shell (keep) |
 | `log.level` | `log.level` | `info` (error \| warn \| info \| debug) | what goes into the log (aleph logs): info = machines down/up, reconnects, answers sent, failures; debug adds every external command |
 | `fleet.board_order` | `fleet.board_order` | `needs` (needs \| working \| recent \| machine) | Fleet's board (the machines list maximised with z): each machine's sessions needs you first, working first, the most recent change first, or in herdr's order; , steps through them there |
 | `update_repo` | `updates.repo` | — | GitHub owner/repo that publishes releases, for self-update |

@@ -351,6 +351,8 @@ pub enum Content {
 
 pub(crate) struct Pane {
     pub content: Content,
+    /// its session has been seen in the fleet (it can end, not just start)
+    seen: bool,
     stream: Option<Stream>,
     /// a tile size the stream should move to, and since when (debounce)
     want: Option<((u16, u16), Instant)>,
@@ -582,6 +584,7 @@ impl State {
             id,
             Pane {
                 content,
+                seen: false,
                 stream: None,
                 want: None,
             },
@@ -674,6 +677,7 @@ fn load(st: &mut State) -> bool {
             st.panes.insert(
                 *id,
                 Pane {
+                    seen: false,
                     content: c,
                     stream: None,
                     want: None,
@@ -2194,6 +2198,80 @@ fn open_new(d: &mut Dash, shell: Option<Option<String>>) {
         nf.set_agent(crate::agents::SHELL);
     }
     d.mode = Mode::NewForm(nf);
+    d.wall.dirty = true;
+}
+
+/// A session that ended by itself leaves Focus and Tile (`close.exited`): its
+/// tile goes, and with the last one you're back where you came from. Only a
+/// session seen alive, on a machine that's answering: not one still starting,
+/// nor one behind a dropped link.
+pub(crate) fn drop_ended(d: &mut Dash) {
+    if d.view != View::Wall {
+        return;
+    }
+    let live: Vec<(u32, bool, bool)> = d
+        .wall
+        .panes
+        .iter()
+        .filter_map(|(id, p)| match &p.content {
+            Content::Session(k) => {
+                let up = k.split_once('|').is_some_and(|(host, _)| {
+                    d.fleet
+                        .host(host)
+                        .is_some_and(|h| h.conn == crate::fleet::Conn::Up && !h.stale)
+                });
+                Some((*id, super::fleet::session(d, k).is_some(), up))
+            }
+            _ => None,
+        })
+        .collect();
+    let keep = d.cfg.get_or("close.exited") == "keep";
+    for (id, alive, up) in live {
+        let seen = d.wall.panes.get(&id).is_some_and(|p| p.seen);
+        if alive {
+            if let Some(p) = d.wall.panes.get_mut(&id) {
+                p.seen = true;
+            }
+        } else if seen && up && !keep {
+            drop_tile(d, id);
+        }
+    }
+}
+
+/// Take one tile away, whichever window it's in.
+fn drop_tile(d: &mut Dash, id: u32) {
+    let Some(i) = d
+        .wall
+        .windows
+        .iter()
+        .position(|w| w.root.leaves().contains(&id))
+    else {
+        return;
+    };
+    let alone = d.wall.windows[i].root.leaves().len() == 1;
+    if alone && d.wall.windows.len() == 1 {
+        d.toast(Level::Info, "the session ended");
+        exit(d);
+        if let Some(p) = d.wall.panes.get_mut(&id) {
+            p.content = Content::Empty;
+            p.stream = None;
+            p.seen = false;
+        }
+        return;
+    }
+    d.wall.typing = d.wall.typing && d.wall.focus() != Some(id);
+    d.wall.panes.remove(&id);
+    if alone {
+        d.wall.windows.remove(i);
+        d.wall.cur = d.wall.cur.min(d.wall.windows.len() - 1);
+    } else {
+        let w = &mut d.wall.windows[i];
+        w.root.remove(id);
+        if w.focus == id {
+            w.focus = w.root.leaves()[0];
+        }
+        w.zoom = false;
+    }
     d.wall.dirty = true;
 }
 

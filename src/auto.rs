@@ -336,6 +336,7 @@ impl Hub {
         self.dispatch_queue(fleet);
         // closes whose grace has passed (or whose session ended by itself)
         self.closer.tick(cfg, fleet, true);
+        self.closer.close_exited(cfg, fleet);
         if real {
             self.moshi.tick(cfg, fleet, trans, fresh);
         }

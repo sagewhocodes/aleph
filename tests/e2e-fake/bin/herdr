@@ -89,6 +89,10 @@ case "$1 $2" in
     echo '{"result":{"type":"agent_started"}}';;
   "agent rename") upd --arg p "$3" --arg n "$4" '(.result.agents[] | select(.pane_id==$p or .name==$p)).name = $n'; ok;;
   "tab rename") updt --arg t "$3" --arg l "$4" '(.result.tabs[] | select(.tab_id==$t)).label = $l'; ok;;
+  # $ST/busy_<pane>: something other than its shell runs there
+  "pane process-info")
+    fg=4242; [[ -f $ST/busy_${4//:/_} ]] && fg=4343
+    echo "{\"result\":{\"type\":\"pane_process_info\",\"process_info\":{\"pane_id\":\"$4\",\"shell_pid\":4242,\"foreground_process_group_id\":$fg,\"foreground_processes\":[]}}}";;
   "pane close") upd --arg p "$3" '.result.agents |= map(select(.pane_id != $p))'; ok;;
   "pane report-metadata") ok;;
   "agent send-keys"|"agent focus") noagent "$3"; ok;;

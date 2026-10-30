@@ -441,6 +441,12 @@ pub const KNOWN: &[Known] = &[
         help: "while typing into an agent, the first esc is held back with a warning (esc stops most agents' work); a second within 3 s goes to the agent, and so do the ones right after it",
     },
     Known {
+        key: "close.exited",
+        default: "close",
+        kind: Kind::Choice(&["close", "keep"]),
+        help: "when an agent exits by itself: close its pane if Aleph opened it and only its shell is left running (close), or leave the pane as a shell (keep)",
+    },
+    Known {
         key: "close.grace",
         default: "5s",
         kind: Kind::Text,

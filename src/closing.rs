@@ -556,9 +556,64 @@ fn dropped(e: &Entry, why: &str) {
 #[derive(Default)]
 pub struct Closer {
     last: Option<Instant>,
+    /// per machine: the agents' panes (pane, label) at the last good look
+    agents: std::collections::HashMap<String, Vec<(String, String)>>,
+}
+
+/// The panes that held an agent and don't any more, from tabs Aleph opened
+/// (`<agent>_<name>`, not a shell of ours). Pure — tested.
+pub fn exited(before: &[(String, String)], now: &[(String, String)]) -> Vec<String> {
+    before
+        .iter()
+        .filter(|(pane, _)| !now.iter().any(|(p, _)| p == pane))
+        .filter(|(_, label)| {
+            label.split_once('_').is_some_and(|(agent, _)| {
+                agent != crate::agents::SHELL && crate::agents::find(agent).is_some()
+            })
+        })
+        .map(|(pane, _)| pane.clone())
+        .collect()
 }
 
 impl Closer {
+    /// An agent that exited by itself leaves its shell behind, in a pane Fleet
+    /// no longer lists (`close.exited`): that pane closes, once herdr says only
+    /// the shell is left. A pane running anything else is never touched.
+    pub fn close_exited(&mut self, cfg: &Config, fleet: &Fleet) {
+        let on = cfg.get_or("close.exited") == "close" && !crate::showcase::demo();
+        for h in &fleet.hosts {
+            if h.conn != crate::fleet::Conn::Up || h.stale || h.paused {
+                continue;
+            }
+            let now: Vec<(String, String)> = h
+                .sessions
+                .iter()
+                .filter(|s| s.agent != crate::agents::SHELL)
+                .map(|s| (s.pane_id.clone(), s.label.clone()))
+                .collect();
+            let gone = match self.agents.get(&h.alias) {
+                Some(before) if on => exited(before, &now),
+                _ => Vec::new(),
+            };
+            self.agents.insert(h.alias.clone(), now);
+            for pane in gone {
+                if pending(&h.alias, &pane).is_some() {
+                    continue;
+                }
+                let (t, alias) = (h.target.clone(), h.alias.clone());
+                std::thread::spawn(move || {
+                    let herdr = Herdr::new(&t);
+                    if herdr.at_prompt(&pane) == Ok(true) && herdr.close_pane(&pane).is_ok() {
+                        crate::log::info(
+                            "close",
+                            &format!("{alias}: closed {pane}, its agent had exited"),
+                        );
+                    }
+                });
+            }
+        }
+    }
+
     /// After every fleet poll. `holder`: this process holds the hub lock.
     pub fn tick(&mut self, cfg: &Config, fleet: &Fleet, holder: bool) {
         if self
@@ -1091,6 +1146,21 @@ pub fn on_quit(cfg: &Config, lock: Option<crate::auto::HubLock>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_agent_of_ours_that_left_counts_as_exited() {
+        let row = |p: &str, l: &str| (p.to_string(), l.to_string());
+        let before = vec![
+            row("w1:p1", "claude_ignite:px"),
+            row("w1:p2", "codex_tune"),
+            row("w1:p3", "my own tab"),
+            row("w1:p4", "shell_frost"),
+            row("w1:p5", "claude_stays"),
+        ];
+        let now = vec![row("w1:p5", "claude_stays")];
+        assert_eq!(exited(&before, &now), ["w1:p1", "w1:p2"]);
+        assert!(exited(&[], &now).is_empty());
+    }
 
     fn s(host: &str, pane: &str, name: &str) -> Session {
         Session {

@@ -3279,6 +3279,50 @@ fn a_rows_model_sits_between_its_name_and_its_state() {
 }
 
 #[test]
+fn a_session_that_ended_leaves_focus_and_tile() {
+    let keys = || vec!["b31|w1:p1".to_string(), "b31|w1:p2".to_string()];
+    let mut d = dash_own();
+    let _ = render(&mut d, 160, 40);
+    wall::tile(&mut d, keys(), View::Fleet);
+    let _ = render(&mut d, 160, 40);
+    wall::drop_ended(&mut d);
+    assert_eq!(d.wall.places().len(), 2);
+    // one ends: its tile goes, the other stays
+    d.fleet
+        .host_mut("b31")
+        .unwrap()
+        .sessions
+        .retain(|s| s.pane_id != "w1:p2");
+    wall::drop_ended(&mut d);
+    let _ = render(&mut d, 160, 40);
+    assert_eq!(d.wall.places().len(), 1);
+    assert_eq!(d.view, View::Wall);
+    // the last one: back where you came from
+    d.fleet
+        .host_mut("b31")
+        .unwrap()
+        .sessions
+        .retain(|s| s.pane_id != "w1:p1");
+    wall::drop_ended(&mut d);
+    assert_eq!(d.view, View::Fleet);
+
+    // close.exited = keep: it stays, saying the session ended
+    let mut d = dash_own();
+    let _ = d.cfg.set("close.exited", "keep");
+    let _ = render(&mut d, 160, 40);
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    wall::drop_ended(&mut d);
+    d.fleet
+        .host_mut("b31")
+        .unwrap()
+        .sessions
+        .retain(|s| s.pane_id != "w1:p1");
+    wall::drop_ended(&mut d);
+    assert_eq!(d.view, View::Wall);
+    assert!(render(&mut d, 160, 40).contains("this session ended"));
+}
+
+#[test]
 fn a_rows_lead_is_as_wide_as_the_axis_assumes() {
     let d = dash();
     for s in d.fleet.sessions() {

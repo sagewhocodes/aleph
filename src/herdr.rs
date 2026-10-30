@@ -976,6 +976,13 @@ impl Herdr {
             .map(|_| ())
     }
 
+    /// Is this pane back at its shell's prompt, nothing else running in it?
+    /// (herdr's `pane.process_info`: the foreground process group is the shell's.)
+    pub fn at_prompt(&self, pane: &str) -> Result<bool, String> {
+        let v = self.call_s(&["pane", "process-info", "--pane", pane])?;
+        Ok(prompt_in(&v))
+    }
+
     pub fn close_pane(&self, pane: &str) -> Result<(), String> {
         if let Some(r) = crate::showcase::close(&self.ssh, pane) {
             return r;
@@ -1938,6 +1945,17 @@ fn split_args(
     a
 }
 
+/// `pane process-info`'s answer: the shell itself in the foreground? Anything
+/// unclear is no.
+fn prompt_in(v: &Value) -> bool {
+    let info = &v["result"]["process_info"];
+    let (fg, shell) = (
+        info["foreground_process_group_id"].as_u64(),
+        info["shell_pid"].as_u64(),
+    );
+    fg.is_some() && fg == shell
+}
+
 /// `tab create` / `workspace create`'s options (pure — tested): the plain
 /// environment only; the OpenRouter key never goes this way.
 fn tab_opts(o: &NewOpts, label: &str) -> Vec<OsString> {
@@ -2313,6 +2331,21 @@ pub fn base_label(l: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_pane_is_at_its_prompt_only_when_the_shell_has_the_foreground() {
+        let info = |fg: Value, shell: Value| {
+            json!({"result": {"process_info": {
+                "foreground_process_group_id": fg, "shell_pid": shell
+            }}})
+        };
+        assert!(prompt_in(&info(json!(46456), json!(46456))));
+        // herdr's answer for a pane running Claude Code, as read on a real one
+        assert!(!prompt_in(&info(json!(47186), json!(46456))));
+        assert!(!prompt_in(&info(Value::Null, json!(46456))));
+        assert!(!prompt_in(&info(Value::Null, Value::Null)));
+        assert!(!prompt_in(&json!({"error": {"code": "pane_not_found"}})));
+    }
 
     #[test]
     fn saved_machines_are_read_whatever_the_shape() {

@@ -2725,6 +2725,7 @@ impl Dash {
             // ... and everyone's light motion: a tick where one finished
             motion::on_transitions(self, &tr, &fresh);
             self.on_transitions(tr);
+            wall::drop_ended(self);
             self.look_again();
             self.settings_moved(false);
             self.tell_drift();
