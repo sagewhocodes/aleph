@@ -14,6 +14,10 @@ use std::time::Instant;
 #[derive(Clone, Debug)]
 pub(crate) enum Item {
     Session(String),
+    /// the split picker: start an agent in the empty pane
+    PaneNew,
+    /// the split picker: a terminal on this machine in the empty pane
+    PaneShell(String),
     /// Focus on this session (Fleet's selected one): its terminal here
     Focus(String),
     /// leave Focus or Tile for the view it was opened from
@@ -124,6 +128,23 @@ impl Palette {
         let mut p = Palette::new(d);
         p.items
             .retain(|(it, _, _, _)| matches!(it, Item::Session(_)));
+        // or something new in it, on any machine
+        if d.view == View::Wall {
+            p.items.push((
+                Item::PaneNew,
+                "New agent in this pane…".into(),
+                "any machine, any agent, any folder".into(),
+                c::ACCENT(),
+            ));
+            for h in &d.fleet.hosts {
+                p.items.push((
+                    Item::PaneShell(h.alias.clone()),
+                    format!("Terminal on {}", h.alias),
+                    "a plain shell in this pane".into(),
+                    c::ACCENT(),
+                ));
+            }
+        }
         p
     }
 
@@ -677,6 +698,8 @@ impl Palette {
 pub(crate) fn run(d: &mut Dash, p: Palette) -> Option<Handoff> {
     match p.chosen()? {
         Item::Session(k) if d.view == View::Wall => super::wall::add(d, k),
+        Item::PaneNew => super::wall::new_in_pane(d, None),
+        Item::PaneShell(h) => super::wall::new_in_pane(d, Some(h)),
         // a session: what enter does in Fleet (Focus, unless enter_opens says otherwise)
         Item::Session(k) => {
             let from = d.view;

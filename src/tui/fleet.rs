@@ -517,6 +517,9 @@ pub(crate) fn note_box(d: &mut Dash, s: &Session) {
 /// `w`: the marked sessions side by side, else the selected machine's,
 /// else every session.
 fn tile_here(d: &mut Dash) {
+    if d.fv.marked.is_empty() && super::wall::reopen_tile(d, View::Fleet) {
+        return;
+    }
     let keys: Vec<String> = if !d.fv.marked.is_empty() {
         targets(d).iter().map(|s| s.key()).collect()
     } else if let Some(h) = d.fv.selected_host(d) {

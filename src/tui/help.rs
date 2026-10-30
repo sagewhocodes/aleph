@@ -647,6 +647,7 @@ pub(crate) fn lines(d: &Dash) -> Vec<Line<'static>> {
             "alt+, alt+.",
             "typing: previous · next session (or the prefix and [ ])",
         ),
+        ("alt+arrows", "typing: the next pane, keys and all"),
         ("esc", "back to where you opened it from"),
         (
             "hjkl · arrows",

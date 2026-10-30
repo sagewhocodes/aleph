@@ -4536,6 +4536,84 @@ fn brackets_step_sessions_and_ctrl_brackets_step_machines() {
     assert_eq!(d.mon.sel, 1);
 }
 
+/// Free splits: any session or terminal from any machine, kept when you leave,
+/// and alt+arrows move between them while typing.
+#[test]
+fn splits_mix_machines_stay_when_you_leave_and_cycle_while_typing() {
+    let mut d = dash_own();
+    let _ = render(&mut d, 140, 40);
+    let panes = |d: &Dash| d.wall.win().unwrap().root.leaves().len();
+    let press = |d: &mut Dash, c| {
+        d.on_key(k(KeyCode::Char(c)));
+    };
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    leave_typing(&mut d);
+    // v: a split, and a picker with every machine's sessions and something new
+    press(&mut d, 'v');
+    assert!(d.wall.in_tile(), "a split Focus is a Tile");
+    assert!(matches!(d.mode, Mode::Palette(_)));
+    let s = render(&mut d, 140, 40);
+    assert!(s.contains("claude_weave"), "another machine's: {s}");
+    assert!(s.contains("New agent in this pane"), "{s}");
+    // a session from the other machine, in the new pane
+    for ch in "weave".chars() {
+        press(&mut d, ch);
+    }
+    d.on_key(k(KeyCode::Enter));
+    assert!(matches!(d.mode, Mode::Normal));
+    assert_eq!(panes(&d), 2);
+    // and a terminal on any machine, chosen by name
+    press(&mut d, 's');
+    for ch in "terminal gpu2".chars() {
+        press(&mut d, ch);
+    }
+    d.on_key(k(KeyCode::Enter));
+    let Mode::NewForm(nf) = &d.mode else {
+        panic!("the terminal's form");
+    };
+    assert_eq!(nf.host(), "gpu2");
+    assert_eq!(nf.agent_id(), crate::agents::SHELL);
+    d.mode = Mode::Normal;
+    assert_eq!(panes(&d), 3);
+    // leaving and coming back: your arrangement, not a fresh Tile
+    let shape = d.wall.win().unwrap().root.to_json().to_string();
+    d.on_key(k(KeyCode::Esc));
+    assert_eq!(d.view, View::Fleet);
+    press(&mut d, 'w');
+    assert!(d.view == View::Wall && d.wall.in_tile());
+    assert_eq!(d.wall.win().unwrap().root.to_json().to_string(), shape);
+    // opening Focus on something else leaves it alone
+    wall::focus_on(&mut d, "b31|w1:p2", View::Fleet);
+    assert!(d.wall.in_focus());
+    leave_typing(&mut d);
+    d.on_key(k(KeyCode::Esc));
+    press(&mut d, 'w');
+    assert_eq!(d.wall.win().unwrap().root.to_json().to_string(), shape);
+    // marks say what to tile: afresh
+    d.on_key(k(KeyCode::Esc));
+    d.fv.marked.insert("b31|w1:p1".into());
+    d.fv.marked.insert("b31|w1:p2".into());
+    press(&mut d, 'w');
+    assert_eq!(panes(&d), 2);
+    d.fv.marked.clear();
+    // typing: alt+arrows go to the next pane, and the keys go with them
+    let _ = render(&mut d, 140, 40);
+    let alt = |code| KeyEvent::new(code, KeyModifiers::ALT);
+    press(&mut d, 'I');
+    assert!(d.wall.typing);
+    let first = d.wall.win().unwrap().focus;
+    d.on_key(alt(KeyCode::Right));
+    assert_ne!(d.wall.win().unwrap().focus, first);
+    assert!(d.wall.typing);
+    d.on_key(alt(KeyCode::Left));
+    assert_eq!(d.wall.win().unwrap().focus, first);
+    // with one pane they're the agent's: nothing here moves
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    let only = d.wall.win().unwrap().focus;
+    d.on_key(alt(KeyCode::Right));
+    assert_eq!(d.wall.win().unwrap().focus, only);
+}
+
 /// `L` locks a Tile's arrangement; `z` still maximises; `space` keeps your own.
 #[test]
 fn a_locked_layout_stays_and_space_keeps_your_own() {

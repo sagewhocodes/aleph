@@ -487,6 +487,26 @@ impl State {
     pub fn in_focus(&self) -> bool {
         self.win().is_some_and(|w| w.name == FOCUS)
     }
+    /// A split makes Focus a Tile: an arrangement of yours, which `w` comes back
+    /// to. A Tile you locked stays as a window of its own; any other goes.
+    fn focus_becomes_tile(&mut self) {
+        if !self.in_focus() {
+            return;
+        }
+        let n = self.windows.len();
+        if let Some(old) = self.windows.iter_mut().find(|w| w.name == TILE && w.locked) {
+            old.name = n.to_string();
+        }
+        self.drop_window(TILE);
+        // (a window going from before it moved everything along)
+        if let Some(i) = self.windows.iter().position(|w| w.name == FOCUS) {
+            self.cur = i;
+        }
+        if let Some(w) = self.win_mut() {
+            w.name = TILE.to_string();
+            w.handmade = true;
+        }
+    }
     /// Is the current window Tile (sessions side by side)?
     pub fn in_tile(&self) -> bool {
         self.win().is_some_and(|w| w.name == TILE)
@@ -643,9 +663,9 @@ fn save(st: &State) {
     if cfg!(test) {
         return;
     }
-    // Focus and Tile are rebuilt every time they open: only your own
-    // windows are kept
-    let kept = |w: &&Window| w.name != FOCUS && w.name != TILE;
+    // Focus is rebuilt every time it opens, and a Tile unless you arranged it:
+    // only your own are kept
+    let kept = |w: &&Window| w.name != FOCUS && (w.name != TILE || w.handmade || w.locked);
     let cur = st.windows.iter().take(st.cur).filter(kept).count();
     let wins: Vec<Value> = st
         .windows
@@ -664,7 +684,7 @@ fn save(st: &State) {
                     (id.to_string(), c)
                 })
                 .collect();
-            json!({"name": w.name, "root": w.root.to_json(), "focus": w.focus, "locked": w.locked, "layout": w.layout, "panes": panes})
+            json!({"name": w.name, "root": w.root.to_json(), "focus": w.focus, "locked": w.locked, "handmade": w.handmade, "layout": w.layout, "panes": panes})
         })
         .collect();
     let doc = json!({"version": 1, "cur": cur.min(wins.len().saturating_sub(1)), "windows": wins});
@@ -722,7 +742,7 @@ fn load(st: &mut State) -> bool {
             zoom: false,
             layout: w.get("layout").and_then(Value::as_u64).unwrap_or(0) as usize,
             locked: w.get("locked").and_then(Value::as_bool).unwrap_or(false),
-            handmade: false,
+            handmade: w.get("handmade").and_then(Value::as_bool).unwrap_or(false),
             own: None,
         });
     }
@@ -828,7 +848,31 @@ pub(crate) fn focus_on(d: &mut Dash, key: &str, from: View) {
     d.wall.typing = d.cfg.get_or("focus.keys") != "aleph";
 }
 
-/// Tile: these sessions side by side (the window `tile`, rebuilt each time).
+/// `w` with nothing marked: back to the Tile you arranged, if there is one.
+pub(crate) fn reopen_tile(d: &mut Dash, from: View) -> bool {
+    enter(d);
+    let Some(i) = d
+        .wall
+        .windows
+        .iter()
+        .position(|w| w.name == TILE && (w.handmade || w.locked))
+    else {
+        return false;
+    };
+    d.wall.cur = i;
+    d.wall.back = Some(from);
+    d.switch(View::Wall);
+    d.note("your arrangement · & closes it, and w starts afresh");
+    true
+}
+
+/// From the split picker: start something new in the pane just made.
+pub(crate) fn new_in_pane(d: &mut Dash, shell_on: Option<String>) {
+    open_new(d, shell_on.map(Some));
+}
+
+/// Tile: these sessions side by side (the window `tile`, rebuilt unless you
+/// locked it).
 pub(crate) fn tile(d: &mut Dash, keys: Vec<String>, from: View) {
     enter(d);
     if keys.is_empty() {
@@ -1071,6 +1115,7 @@ pub(crate) fn empty_pane(d: &mut Dash) -> Option<u32> {
     if refused(d) {
         return None;
     }
+    d.wall.focus_becomes_tile();
     let id = d.wall.new_pane(Content::Empty);
     let dir = best_dir(&d.wall, focus);
     if let Some(w) = d.wall.win_mut() {
@@ -1096,6 +1141,7 @@ pub(crate) fn add(d: &mut Dash, key: String) {
             p.content = Content::Session(key);
         }
     } else {
+        st.focus_becomes_tile();
         let id = st.new_pane(Content::Session(key));
         let dir = best_dir(st, f);
         if let Some(w) = st.win_mut() {
@@ -1441,6 +1487,7 @@ fn run(d: &mut Dash, cmd: Cmd) {
     let st = &mut d.wall;
     match cmd {
         Cmd::SplitSide | Cmd::SplitStack => {
+            st.focus_becomes_tile();
             let id = st.new_pane(Content::Empty);
             let dir = if cmd == Cmd::SplitSide {
                 Dir::Side
@@ -1942,6 +1989,25 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
         if leave_keys(d).contains(&ks) {
             stop_typing(d);
             return None;
+        }
+        // alt+arrows: the next pane, keys and all (with one pane they're the agent's)
+        if k.modifiers.contains(KeyModifiers::ALT)
+            && d.wall.win().is_some_and(|w| w.root.leaves().len() > 1)
+        {
+            let zoomed = d.wall.win().is_some_and(|w| w.zoom);
+            let go = match (k.code, zoomed) {
+                (KeyCode::Left | KeyCode::Up, true) => Some(Cmd::Prev),
+                (KeyCode::Right | KeyCode::Down, true) => Some(Cmd::Next),
+                (KeyCode::Left, _) => Some(Cmd::Move(-1, 0)),
+                (KeyCode::Right, _) => Some(Cmd::Move(1, 0)),
+                (KeyCode::Up, _) => Some(Cmd::Move(0, -1)),
+                (KeyCode::Down, _) => Some(Cmd::Move(0, 1)),
+                _ => None,
+            };
+            if let Some(go) = go {
+                run(d, go);
+                return None;
+            }
         }
         // alt+, alt+.: the previous / next session (every bracket is the agent's)
         if ks == "alt+," || ks == "alt+." {
@@ -3582,6 +3648,7 @@ pub(crate) fn cheatsheet(d: &Dash, f: &mut Frame, area: Rect) {
             "alt+, alt+.",
             "typing: the previous / next session (or the prefix and [ ])",
         ),
+        row("alt+arrows", "typing: the next pane, keys and all"),
         row("c · w W", "new window · next / previous"),
         row("{ }", "Focus: next · previous that needs you"),
         row(", · #", "rename window · pane numbers"),

@@ -908,10 +908,10 @@ impl NewForm {
                 .collect(),
         )
     }
-    fn host(&self) -> String {
+    pub(crate) fn host(&self) -> String {
         self.hosts.get(self.host).cloned().unwrap_or_default()
     }
-    fn agent_id(&self) -> &'static str {
+    pub(crate) fn agent_id(&self) -> &'static str {
         agents_list()[self.agent]
     }
     /// The agents matching what's typed, in the order to offer them: the
