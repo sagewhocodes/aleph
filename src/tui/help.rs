@@ -274,7 +274,7 @@ pub(crate) fn entries(d: &Dash) -> Vec<Entry> {
         ("s", "split stacked, then pick a session"),
         (
             "i",
-            "type into the pane — ctrl+] (or a click outside) stops; ctrl+q leaves Focus",
+            "type into the pane — ctrl+q (or a click outside) stops; ctrl+q again goes to Fleet",
         ),
         ("n", "a new session in this window"),
         ("S", "a new shell (plain terminal) in this window"),
@@ -640,7 +640,7 @@ pub(crate) fn lines(d: &Dash) -> Vec<Line<'static>> {
         ),
         (
             "i · enter",
-            "type into the pane — ctrl+] (or a click outside) stops, ctrl+q leaves; ctrl+b works while typing",
+            "type into the pane — ctrl+q (or a click outside) stops, ctrl+q again goes to Fleet; ctrl+b works while typing",
         ),
         (
             "n · S · a",

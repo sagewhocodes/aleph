@@ -155,7 +155,10 @@ impl Palette {
                 items.push((
                     Item::StopTyping,
                     "Keys back to Aleph".into(),
-                    format!("stop typing into the agent, {what} stays (ctrl+])"),
+                    format!(
+                        "stop typing into the agent, {what} stays ({})",
+                        super::wall::keys_back(d)
+                    ),
                     c::ACCENT(),
                 ));
             }

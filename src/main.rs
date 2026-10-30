@@ -1230,7 +1230,7 @@ const DETAILS: &[(&str, &[&str])] = &[
     ]),
     ("wall", &[
         "Live tiles of sessions from any machines (herdr terminal streams).",
-        "  arrows move · enter attach (back here on detach) · z zoom · i type into a tile (ctrl+] stops, ctrl+q leaves)",
+        "  arrows move · enter attach (back here on detach) · z zoom · i type into a tile (ctrl+q stops, ctrl+q again goes to Fleet)",
         "  1-9 answer · s send a prompt · b broadcast · L layout · x drop tile · a add · esc back",
         "  aleph wall ignite tune     start with those sessions",
     ]),

@@ -14,8 +14,8 @@ dashboard's Settings tab edits them. Per-machine settings are `host.<alias>.<key
 | `tab_prefix` | `sessions.tab_prefix` | — | tab name prefix; empty = <agent>_ (claude_, codex_, …) |
 | `return_to_dashboard` | `sessions.return_to_dashboard` | `true` (on/off) | come back to the dashboard after detaching (ctrl+b q) |
 | `enter_opens` | `sessions.enter_opens` | `focus` (focus \| attach \| direct) | enter on a session: Focus (fullscreen here, with messages and splits), attach in herdr (its own terminal view), or straight into the agent |
-| `focus.keys` | `sessions.focus_keys` | `agent` (agent \| aleph) | where keys go when Focus opens: agent (straight into it, as in its own terminal — focus.exit leaves Focus, ctrl+], mux_leave or a click outside gives the keys back to Aleph; the wheel scrolls its history) or aleph (Aleph's keys first: i for the message bar, I to type into it) |
-| `focus.exit` | `sessions.focus_exit` | `ctrl+q` | keys that leave Focus (and Tile) at once, even while typing into the agent — esc is the agent's then (it interrupts its work); comma-separated: ctrl+q, f12, alt+q, … |
+| `focus.keys` | `sessions.focus_keys` | `agent` (agent \| aleph) | where keys go when Focus opens: agent (straight into it, as in its own terminal — focus.exit, mux_leave or a click outside gives the keys back to Aleph, focus.exit again goes to Fleet; the wheel scrolls its history) or aleph (Aleph's keys first: i for the message bar, I to type into it) |
+| `focus.exit` | `sessions.focus_exit` | `ctrl+q` | keys out of Focus (and Tile): while typing into the agent, the first gives the keys back to Aleph (esc is the agent's then: it interrupts its work), the next goes to Fleet; the prefix and then this key sends it to the pane; comma-separated: ctrl+q, f12, alt+q, … |
 | `focus.esc_guard` | `sessions.focus_esc_guard` | `true` (on/off) | while typing into an agent, the first esc is held back with a warning (esc stops most agents' work); a second within 3 s goes to the agent, and so do the ones right after it |
 | `close.grace` | `sessions.close_grace` | `5s` | how long a close waits before it happens, wherever it comes from (x, aleph close, Raycast, the web): the agent keeps running until then, and u, aleph close --undo or Undo keep it (5s, 30s, 1m; 0 = at once; at most 1h); aleph close --now skips it once |
 | `show_hidden` | `browser.show_hidden` | `false` (on/off) | browser: show dot-folders by default |
@@ -36,7 +36,7 @@ dashboard's Settings tab edits them. Per-machine settings are `host.<alias>.<key
 | `wall_layout` | `tile.layout` | `grid` (grid \| main \| rows \| cols) | tiling layout of the wall |
 | `mux_keys` | `tile.keys` | `herdr` (herdr \| tmux) | Focus / Tile prefix key: herdr's own (its config.toml [keys] prefix) or tmux's ctrl+b |
 | `mux_prefix` | `tile.prefix` | — | a prefix key of your own for Focus / Tile (e.g. ctrl+a); empty = mux_keys decides |
-| `mux_leave` | `tile.leave` | — | keys that stop typing into a pane in Focus / Tile and give them back to Aleph, besides ctrl+] (comma-separated: f12, alt+q, …); a click outside the pane stops it too; focus.exit leaves Focus itself |
+| `mux_leave` | `tile.leave` | — | more keys that stop typing into a pane in Focus / Tile and give them back to Aleph, besides focus.exit (comma-separated: f12, alt+q, …); a click outside the pane stops it too |
 | `wall_max` | `tile.max` | `9` (number) | tiles per wall page |
 
 ## Appearance

@@ -426,13 +426,13 @@ pub const KNOWN: &[Known] = &[
         key: "focus.keys",
         default: "agent",
         kind: Kind::Choice(&["agent", "aleph"]),
-        help: "where keys go when Focus opens: agent (straight into it, as in its own terminal — focus.exit leaves Focus, ctrl+], mux_leave or a click outside gives the keys back to Aleph; the wheel scrolls its history) or aleph (Aleph's keys first: i for the message bar, I to type into it)",
+        help: "where keys go when Focus opens: agent (straight into it, as in its own terminal — focus.exit, mux_leave or a click outside gives the keys back to Aleph, focus.exit again goes to Fleet; the wheel scrolls its history) or aleph (Aleph's keys first: i for the message bar, I to type into it)",
     },
     Known {
         key: "focus.exit",
         default: "ctrl+q",
         kind: Kind::Text,
-        help: "keys that leave Focus (and Tile) at once, even while typing into the agent — esc is the agent's then (it interrupts its work); comma-separated: ctrl+q, f12, alt+q, …",
+        help: "keys out of Focus (and Tile): while typing into the agent, the first gives the keys back to Aleph (esc is the agent's then: it interrupts its work), the next goes to Fleet; the prefix and then this key sends it to the pane; comma-separated: ctrl+q, f12, alt+q, …",
     },
     Known {
         key: "focus.esc_guard",
@@ -1399,7 +1399,7 @@ pub const KNOWN: &[Known] = &[
         key: "mux_leave",
         default: "",
         kind: Kind::Text,
-        help: "keys that stop typing into a pane in Focus / Tile and give them back to Aleph, besides ctrl+] (comma-separated: f12, alt+q, …); a click outside the pane stops it too; focus.exit leaves Focus itself",
+        help: "more keys that stop typing into a pane in Focus / Tile and give them back to Aleph, besides focus.exit (comma-separated: f12, alt+q, …); a click outside the pane stops it too",
     },
     Known {
         key: "wall_max",

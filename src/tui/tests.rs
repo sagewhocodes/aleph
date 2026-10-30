@@ -62,9 +62,9 @@ fn sess(host: &str, pane: &str, name: &str, status: &str) -> Session {
     }
 }
 
-/// ctrl+]: keys back from the agent to Aleph (Focus stays).
+/// ctrl+q: keys back from the agent to Aleph (Focus stays).
 fn leave_typing(d: &mut Dash) {
-    d.on_key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
+    d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
     assert!(!d.wall.typing);
 }
 
@@ -1097,7 +1097,7 @@ fn enter_opens_focus_and_w_tiles() {
     assert_eq!(d.view, View::Wall);
     assert!(d.wall.in_focus());
     assert_eq!(cur(&d), "b31|w1:p1");
-    // keys go to the agent first; ctrl+] gives them back to Focus
+    // keys go to the agent first; ctrl+q gives them back to Focus
     assert!(d.wall.typing);
     leave_typing(&mut d);
     let s = render(&mut d, 120, 30);
@@ -2273,9 +2273,13 @@ fn focus_opens_typing_into_the_agent_unless_asked_not_to() {
     // ctrl+c is the agent's here, never a quit
     let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
     assert!(!matches!(d.on_key(ctrl('c')), Some(Handoff::Quit)));
-    // ctrl+] (as most terminals send it: ctrl+5) gives the keys back
+    // ctrl+] (as most terminals send it: ctrl+5) is the agent's now
     d.on_key(ctrl('5'));
-    assert!(!d.wall.typing);
+    d.on_key(ctrl(']'));
+    assert!(d.wall.typing);
+    // ctrl+q gives the keys back and Focus stays
+    d.on_key(ctrl('q'));
+    assert!(!d.wall.typing && d.view == View::Wall);
     assert!(matches!(d.on_key(ctrl('c')), Some(Handoff::Quit)));
     let _ = d.cfg.set("focus.keys", "aleph");
     wall::focus_on(&mut d, "b31|w1:p2", View::Fleet);
@@ -2298,7 +2302,7 @@ fn showcase_attach_opens_focus_and_herdr_asks_first() {
     assert_eq!(d.view, View::Wall);
     assert!(d.wall.in_focus());
     assert_eq!(cur(&d), "b31|w1:p1");
-    // (it opens typing into the agent: ctrl+] gives Aleph its keys)
+    // (it opens typing into the agent: ctrl+q gives Aleph its keys)
     leave_typing(&mut d);
     // a again in Focus: stays there, and says how to attach for real
     assert!(d.on_key(k(KeyCode::Char('a'))).is_none());
@@ -4035,23 +4039,22 @@ fn typing_into_a_pane_starts_from_fleet_and_is_easy_to_leave() {
     d.on_key(k(KeyCode::Char('I')));
     assert!(d.wall.typing, "I types straight into it");
     let t = render(&mut d, 120, 30);
-    assert!(
-        t.contains("ctrl+q") && t.contains("leave") && t.contains("Aleph's keys"),
-        "{t}"
-    );
-    // ctrl+q leaves Focus at once, typing or not (esc would interrupt the agent)
+    assert!(t.contains("ctrl+q") && t.contains("Aleph's keys"), "{t}");
+    // ctrl+q: the keys back (esc would interrupt the agent); again: out of Focus
     d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
     assert!(!d.wall.typing);
+    assert_eq!(d.view, View::Wall);
+    d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
     assert_eq!(d.view, View::Fleet, "back where it came from");
     d.on_key(k(KeyCode::Char('I')));
     assert!(d.wall.typing && d.view == View::Wall);
     // esc while typing is the agent's: Focus stays, keys still go to it
     d.on_key(k(KeyCode::Esc));
     assert!(d.wall.typing && d.view == View::Wall);
-    // ctrl+] gives the keys back to Aleph and stays in Focus
-    d.on_key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
+    // ctrl+q gives the keys back to Aleph and stays in Focus
+    d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
     assert!(!d.wall.typing && d.view == View::Wall);
-    // ctrl+q from Aleph's keys leaves too
+    // ctrl+q again leaves
     d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
     assert_eq!(d.view, View::Fleet);
     d.on_key(k(KeyCode::Char('I')));
@@ -4420,6 +4423,46 @@ fn the_board_says_why_a_machine_shows_no_gpu() {
     assert!(s.contains("no nvidia-smi or rocm-smi"), "{s}");
 }
 
+/// ctrl+q: the keys back, then Fleet. ctrl+] is the agent's now, and the prefix
+/// sends ctrl+q itself, for a shell frozen by ctrl+s.
+#[test]
+fn ctrl_q_gives_the_keys_back_then_goes_to_fleet() {
+    let mut d = dash_own();
+    let _ = render(&mut d, 120, 30);
+    let ctrl = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+    // opened from the Inbox: esc goes back there, ctrl+q to Fleet
+    wall::focus_on(&mut d, "b31|w1:p1", View::Inbox);
+    assert!(d.wall.typing);
+    for key in [ctrl(']'), ctrl('5')] {
+        d.on_key(key);
+        assert!(d.wall.typing && d.view == View::Wall, "the agent's");
+    }
+    // the prefix, then ctrl+q: sent through, still typing
+    d.on_key(ctrl('b'));
+    d.on_key(ctrl('q'));
+    assert!(d.wall.typing && d.view == View::Wall, "sent to the pane");
+    d.on_key(ctrl('q'));
+    assert!(
+        !d.wall.typing && d.view == View::Wall,
+        "the keys, Focus stays"
+    );
+    d.on_key(ctrl('q'));
+    assert_eq!(d.view, View::Fleet);
+    wall::focus_on(&mut d, "b31|w1:p1", View::Inbox);
+    d.on_key(ctrl('q'));
+    d.on_key(k(KeyCode::Esc));
+    assert_eq!(d.view, View::Inbox, "esc goes back where it came from");
+    // a key of your own (mux_leave) still gives the keys back
+    let _ = d.cfg.set("mux_leave", "f12");
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    d.on_key(k(KeyCode::F(12)));
+    assert!(!d.wall.typing && d.view == View::Wall);
+    // zoomed for typing: the zoom goes when the keys do
+    wall::type_into(&mut d, "b31|w1:p1", View::Fleet);
+    d.on_key(ctrl('q'));
+    assert!(!d.wall.typing);
+}
+
 #[test]
 fn the_board_marks_several_and_can_group_the_same_question() {
     let mut d = dash_own();
@@ -4492,6 +4535,8 @@ fn the_board_answers_in_focus_and_comes_back() {
     assert!(d.view == View::Wall && d.wall.in_focus() && d.wall.typing);
     // leaving Focus while it still asks: the board again
     d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    assert!(d.view == View::Wall && !d.wall.typing);
+    d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
     assert!(matches!(d.mode, Mode::Approvals));
     // a click on a card does the same
     d.on_key(k(KeyCode::Char('v')));
@@ -4506,7 +4551,8 @@ fn the_board_answers_in_focus_and_comes_back() {
     // answered: leaving Focus doesn't bring the board back
     d.fleet.host_mut("b31").unwrap().sessions[1].status = "idle".into();
     d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
-    assert!(matches!(d.mode, Mode::Normal));
+    d.on_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+    assert!(d.view != View::Wall && matches!(d.mode, Mode::Normal));
 }
 
 /// ctrl+k "usage b31" / "usage claude": Monitor › Usage for one machine or

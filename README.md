@@ -99,7 +99,7 @@ aleph doctor                         # check everything
 | `n` · `i` | New session · browse folders |
 | `w` · `y` | Tile · approve |
 | `ctrl+a` · `ctrl+k` | Approvals · palette |
-| `ctrl+]` | Keys back to Aleph |
+| `ctrl+q` | Keys back to Aleph, then back to Fleet |
 | `?` | Every key |
 
 ## 💻 From the shell

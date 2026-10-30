@@ -17,10 +17,10 @@
 //!
 //! Focus opens typing into its agent (`focus.keys`): every key as its own
 //! terminal sends it, over the pane's control stream (`stream.rs`), pastes
-//! as one; ctrl+q (`focus.exit`) leaves Focus at once — esc is the agent's
-//! then, and interrupts it, so the first is held back with a warning
-//! (`focus.esc_guard`; a second within 3 s goes) — and ctrl+] or a click
-//! outside gives the keys back to Aleph.
+//! as one; ctrl+q (`focus.exit`) gives the keys back to Aleph and a second
+//! leaves Focus — esc is the agent's then, and interrupts it, so the first is
+//! held back with a warning (`focus.esc_guard`; a second within 3 s goes) — and
+//! a click outside gives the keys back too.
 //! The wheel scrolls the pane under it (herdr's history, or the agent's own
 //! scrolling when it asked for the mouse); clicks go to an agent that takes
 //! them.
@@ -28,7 +28,7 @@
 //! In a session pane, `i` (or enter) opens the message bar at its bottom:
 //! enter sends now, tab queues it for after the current reply (the hub sends
 //! it once the agent is done), ↑ recalls, esc closes (the draft stays). `I`
-//! types raw keys into the pane (`ctrl+]` or a click outside it stops; `mux_leave`; `ctrl+q` leaves), `Q` shows that pane's
+//! types raw keys into the pane (`ctrl+q`, `mux_leave` or a click outside it stops; `ctrl+q` again leaves), `Q` shows that pane's
 //! queue, `a` attaches in herdr (`A` straight to the agent, `O` in a new
 //! terminal tab) and `X` closes the session. esc goes back to the tab it was
 //! opened from.
@@ -1238,7 +1238,10 @@ fn esc_goes(d: &mut Dash) -> bool {
     d.wall.esc_held = Some(Instant::now());
     d.toast(
         Level::Warn,
-        "native input: esc again stops the agent's work · ctrl+] or a click outside leaves",
+        format!(
+            "native input: esc again stops the agent's work · {} or a click outside gives the keys back",
+            keys_back(d)
+        ),
     );
     false
 }
@@ -1575,7 +1578,7 @@ fn vim_win(k: &KeyEvent) -> Option<Cmd> {
 /// The prefix key: `mux_prefix` if set; else, with `mux_keys = herdr` (the
 /// default), herdr's own `[keys] prefix` from its config.toml, so the same
 /// muscle memory works here; else ctrl+b.
-/// The keys that stop typing (`mux_leave`; ctrl+] always does too).
+/// More keys that stop typing, besides `focus.exit` (`mux_leave`).
 fn leave_keys(d: &Dash) -> Vec<String> {
     d.cfg
         .get_or("mux_leave")
@@ -1585,15 +1588,17 @@ fn leave_keys(d: &Dash) -> Vec<String> {
         .collect()
 }
 
-/// The first of them, for hints.
-pub(crate) fn leave_key(d: &Dash) -> String {
-    leave_keys(d)
+/// The key that gives the keys back, for hints.
+pub(crate) fn keys_back(d: &Dash) -> String {
+    exit_keys(d)
         .into_iter()
+        .chain(leave_keys(d))
         .next()
-        .unwrap_or_else(|| "ctrl+]".into())
+        .unwrap_or_else(|| "a click outside".into())
 }
 
-/// The keys that leave Focus (and Tile) at once, typing or not (`focus.exit`).
+/// The keys out, typing or not (`focus.exit`): typing, the first gives the keys
+/// back to Aleph; then the next goes from Focus (and Tile) to Fleet.
 fn exit_keys(d: &Dash) -> Vec<String> {
     d.cfg
         .get_or("focus.exit")
@@ -1608,10 +1613,12 @@ pub(crate) fn exit_key(d: &Dash) -> Option<String> {
     exit_keys(d).into_iter().next()
 }
 
-/// Keys back to Aleph from the agent (ctrl+], a click outside, the
-/// palette); a held esc is forgotten.
+/// Keys back to Aleph from the agent (ctrl+q, a click outside, the palette); a
+/// pane zoomed for typing goes back and a held esc is forgotten.
 pub(crate) fn stop_typing(d: &mut Dash) {
     d.wall.typing = false;
+    d.wall.unzoom();
+    d.wall.dirty = true;
     (d.wall.esc_held, d.wall.esc_sent) = (None, None);
 }
 
@@ -1731,8 +1738,9 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
     match d.wall.pending {
         Pending::Prefix => {
             d.wall.pending = Pending::None;
-            if ks == prefix_key(d) {
-                // the prefix twice: send it through to the pane
+            if ks == prefix_key(d) || exit_keys(d).contains(&ks) {
+                // the prefix twice, or the prefix and ctrl+q (the way to wake a
+                // shell frozen by ctrl+s): send it through to the pane
                 if d.wall.typing && type_key(d, &k) {
                     return None;
                 }
@@ -1761,17 +1769,20 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
         d.wall.pending = Pending::Prefix;
         return None;
     }
-    // leave at once, typing or not (esc is the agent's while typing)
+    // ctrl+q: typing, the keys come back to Aleph (esc is the agent's then);
+    // then it goes to Fleet, wherever Focus was opened from (esc goes back there)
     if exit_keys(d).contains(&ks) {
-        exit(d);
+        if d.wall.typing {
+            stop_typing(d);
+        } else {
+            d.wall.back = Some(View::Fleet);
+            exit(d);
+        }
         return None;
     }
     // typing into the focused pane
     if d.wall.typing {
-        // (most terminals send ctrl+] as ctrl+5's byte, 0x1d)
-        if (ctrl && matches!(k.code, KeyCode::Char(']') | KeyCode::Char('5')))
-            || leave_keys(d).contains(&ks)
-        {
+        if leave_keys(d).contains(&ks) {
             stop_typing(d);
             return None;
         }
@@ -2426,14 +2437,11 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
         return vec![("enter", "send now"), ("d", "drop"), ("esc", "close")];
     }
     if d.wall.typing {
-        let mut v = Vec::new();
-        if let Some(k) = exit_key(d) {
-            v.push((static_key(&k), "leave"));
-        }
-        v.push(("ctrl+]", "Aleph's keys (or click outside)"));
-        v.push(("wheel", "scroll back"));
-        v.push(("ctrl+b", "prefix"));
-        return v;
+        return vec![
+            (static_key(&keys_back(d)), "Aleph's keys (or click outside)"),
+            ("wheel", "scroll back"),
+            ("ctrl+b", "prefix"),
+        ];
     }
     match d.wall.content_of_focus() {
         Some(Content::Empty) | None => vec![
@@ -3066,7 +3074,7 @@ fn status_bar(d: &mut Dash, f: &mut Frame, r: Rect) {
     // an esc held back: what the next one does, and the ways out
     if esc_waits(d) {
         l.push(Span::styled(
-            "esc again sends it to the agent and stops its work · ctrl+] leaves native input · or click outside the pane",
+            format!("esc again sends it to the agent and stops its work · {} gives the keys back · or click outside the pane", keys_back(d)),
             ui::fg(c::YELLOW()).add_modifier(Modifier::BOLD),
         ));
         d.wall.tabs = Vec::new();
@@ -3186,9 +3194,8 @@ pub(crate) fn cheatsheet(d: &Dash, f: &mut Frame, area: Rect) {
         ),
         row(
             "ctrl+q",
-            "leave Focus at once, even while typing (focus.exit; esc is the agent's)",
+            "keys back to Aleph (or a click outside), then to Fleet (focus.exit; esc is the agent's)",
         ),
-        row("ctrl+]", "keys back to Aleph (or a click outside)"),
         row(
             "ctrl+a",
             "the approval board, typing too, while anything waits on you (else the agent's)",
