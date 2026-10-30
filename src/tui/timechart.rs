@@ -618,7 +618,7 @@ pub(crate) fn monitor_hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
         ("t", "its timeline"),
         ("+ -", "hours"),
         ("e", "ended"),
-        ("⇥ ←→", "view"),
+        ("←→", "view"),
         ("f o c m g p n s t u", "jump"),
         ("esc", "back"),
     ]

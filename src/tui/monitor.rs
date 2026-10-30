@@ -47,7 +47,7 @@ fn n_hosts(d: &Dash) -> usize {
     d.fleet.hosts.len().max(1)
 }
 
-/// ⇥ / ⇧⇥: the next / previous view.
+/// ← →: the next / previous page.
 pub(crate) fn sub_step(d: &mut Dash, fwd: bool) {
     let pages = pages(d);
     let n = pages.len();
@@ -217,7 +217,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
         Sub::Timeline => super::timechart::monitor_hints(d),
         Sub::Services => vec![
             ("[ ]", "machine"),
-            ("⇥ ←→", "view"),
+            ("←→", "view"),
             ("f o c m g p n s t u", "jump"),
             ("esc", "back"),
         ],
@@ -241,7 +241,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
         Sub::Fleet => vec![
             ("↑↓", "machine"),
             ("enter", "its overview"),
-            ("⇥ ←→", "view"),
+            ("←→", "view"),
             ("f o c m g p n", "jump"),
             ("esc", "back"),
         ],
@@ -255,13 +255,13 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
                     "hide processes"
                 },
             ),
-            ("⇥ ←→", "view"),
+            ("←→", "view"),
             ("[ ]", "machine"),
             ("f o c m g p n", "jump"),
             ("esc", "back"),
         ],
         _ => vec![
-            ("⇥ ←→", "view"),
+            ("←→", "view"),
             ("[ ]", "machine"),
             ("f o c m g p n", "jump"),
             ("esc", "back"),

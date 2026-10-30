@@ -760,7 +760,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
             v.push(("f", "fix"));
         }
         v.push((
-            "⇥",
+            "v",
             if d.doc.by_agent {
                 "by machine"
             } else {
@@ -821,7 +821,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
         ("i", "import"),
         ("x", "export"),
         ("/", "search"),
-        ("⇥", "section"),
+        ("[ ]", "section"),
     ]);
     v
 }
@@ -1380,16 +1380,6 @@ pub(crate) fn click(d: &mut Dash, i: usize, double: bool) {
     }
 }
 
-/// ⇥ / ⇧⇥: the next / previous section — or, in the Doctor with its list
-/// focused, by machine ⇄ by agent.
-pub(crate) fn sub_step(d: &mut Dash, fwd: bool) {
-    if sec_name(d) == "Doctor" && d.set.search.is_empty() && d.set.focus >= 1 {
-        doctor::toggle_by_agent(d);
-    } else {
-        step_section(d, fwd);
-    }
-}
-
 fn step_section(d: &mut Dash, fwd: bool) {
     let n = SECTIONS.len();
     d.set.sec = if fwd {
@@ -1434,6 +1424,10 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
         }
         KeyCode::Char('[') => step_section(d, false),
         KeyCode::Char(']') => step_section(d, true),
+        // the Doctor: by machine ⇄ by agent
+        KeyCode::Char('v') if sec_name(d) == "Doctor" && d.set.search.is_empty() => {
+            doctor::toggle_by_agent(d)
+        }
         KeyCode::Char('/') => {
             d.set.searching = true;
             d.set.search.clear();
@@ -1564,7 +1558,7 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect) {
             Paragraph::new(Line::from(vec![
                 Span::styled(" ‹ ", ui::faint()),
                 Span::styled(format!(" {s} "), ui::selected().fg(c::ACCENT())),
-                Span::styled(" ›  ⇥ changes the section", ui::faint()),
+                Span::styled(" ›  [ ] changes the section", ui::faint()),
             ])),
             bar,
         );

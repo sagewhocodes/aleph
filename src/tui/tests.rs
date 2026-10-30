@@ -1545,9 +1545,9 @@ fn doctor_lists_checks_by_machine_problems_first() {
         _ => panic!("no confirm"),
     }
     d.mode = Mode::Normal;
-    // ⇥ (the list focused): a block per agent, each problem titled by its machine
+    // v (the list focused): a block per agent, each problem titled by its machine
     d.set.focus = 1;
-    d.on_key(k(KeyCode::Tab));
+    d.on_key(k(KeyCode::Char('v')));
     let s = render(&mut d, 160, 40);
     let claude = s
         .lines()
@@ -1555,7 +1555,7 @@ fn doctor_lists_checks_by_machine_problems_first() {
         .expect(&s);
     assert!(claude.contains("dex42"), "{claude}");
     assert!(s.lines().any(|l| l.contains("! dex42")), "{s}");
-    d.on_key(k(KeyCode::BackTab));
+    d.on_key(k(KeyCode::Char('v')));
     // narrow: the detail goes under the list, where it is in its title
     d.doc.sel = 1;
     let s = render(&mut d, 80, 24);
@@ -1596,45 +1596,68 @@ fn four_tabs_and_the_focus_breadcrumb() {
     leave_typing(&mut d);
     let s = render(&mut d, 140, 30);
     assert!(s.contains("› Focus · b31 › claude_temper"), "{s}");
-    // no sub-headings in the overlay: ⇥ goes to the tab after the one it came from
+    // Focus is among the views while it's open: ⇥ goes on, and comes round to it
     d.on_key(k(KeyCode::Tab));
     assert_eq!(d.view, View::Monitor);
+    d.on_key(k(KeyCode::BackTab));
+    assert_eq!(d.view, View::Wall);
+    assert!(!d.wall.typing, "the keys are Aleph's on the way through");
 }
 
 #[test]
-fn tab_cycles_the_sub_headings_wherever_you_are() {
+fn tab_cycles_the_views_wherever_you_are() {
     let mut d = dash();
     let _ = render(&mut d, 140, 30);
-    // Monitor: ⇥ / ⇧⇥ its views
+    // ⇥ / ⇧⇥: every view in turn, from anywhere, and round
+    for v in [View::Monitor, View::Inbox, View::Settings, View::Fleet] {
+        d.on_key(k(KeyCode::Tab));
+        assert_eq!(d.view, v);
+    }
+    d.on_key(k(KeyCode::BackTab));
+    assert_eq!(d.view, View::Settings);
+    d.on_key(k(KeyCode::Tab));
+    assert_eq!(d.view, View::Fleet);
+    // Focus joins them once it's open, and esc goes back where ⇥ came from
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    // typing: ⇥ is the agent's
+    d.on_key(k(KeyCode::Tab));
+    assert!(d.view == View::Wall && d.wall.typing);
+    leave_typing(&mut d);
+    d.on_key(k(KeyCode::Tab));
+    assert_eq!(d.view, View::Monitor);
+    d.on_key(k(KeyCode::BackTab));
+    assert_eq!(d.view, View::Wall);
+    d.on_key(k(KeyCode::Esc));
+    assert_eq!(d.view, View::Monitor);
+    // what ⇥ did before: Monitor's pages are ← →
     d.on_key(k(KeyCode::Char('2')));
     let first = d.mon.sub;
-    d.on_key(k(KeyCode::Tab));
+    d.on_key(k(KeyCode::Right));
     assert_ne!(d.mon.sub, first);
-    d.on_key(k(KeyCode::BackTab));
+    d.on_key(k(KeyCode::Left));
     assert_eq!(d.mon.sub, first);
-    assert_eq!(d.view, View::Monitor, "⇥ never leaves the view");
-    // Inbox: its filters
+    // the Inbox's filters f F
     d.on_key(k(KeyCode::Char('3')));
     let show = d.inbox.show;
-    d.on_key(k(KeyCode::Tab));
+    d.on_key(k(KeyCode::Char('f')));
     assert_ne!(d.inbox.show, show);
-    d.on_key(k(KeyCode::BackTab));
+    d.on_key(KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT));
     assert_eq!(d.inbox.show, show);
-    // Settings: its sections; in the Doctor (its list focused) by machine ⇄ by agent
+    // Settings' sections [ ], the Doctor's arrangement v
     d.on_key(k(KeyCode::Char('4')));
     let sec = d.set.sec;
     d.set.focus = 0;
-    d.on_key(k(KeyCode::Tab));
+    d.on_key(k(KeyCode::Char(']')));
     assert_ne!(d.set.sec, sec);
     crate::tui::doctor::set_lines(&mut d, doctor_report());
     settings::go_section(&mut d, "Doctor");
     d.set.focus = 1;
-    d.on_key(k(KeyCode::Tab));
+    d.on_key(k(KeyCode::Char('v')));
     assert!(d.doc.by_agent);
-    d.on_key(k(KeyCode::BackTab));
+    d.on_key(k(KeyCode::Char('v')));
     assert!(!d.doc.by_agent);
     let s = render(&mut d, 140, 30);
-    assert!(s.contains("⇥ sub-views"), "{s}");
+    assert!(s.contains("⇥ views"), "{s}");
 }
 
 #[test]

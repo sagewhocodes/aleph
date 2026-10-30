@@ -1325,7 +1325,7 @@ pub(crate) fn forget(d: &mut Dash, f: Forget) {
     d.inbox.sel = d.inbox.sel.min(items(d).len().saturating_sub(1));
 }
 
-/// ⇥ / ⇧⇥ (and `f`): the next / previous kind filter.
+/// `f` `F`: the next / previous kind filter.
 pub(crate) fn filter_step(d: &mut Dash, fwd: bool) {
     let n = Show::ALL.len();
     let i = Show::ALL
@@ -1470,6 +1470,7 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
             ask_forget(d, &it);
         }
         KeyCode::Char('f') => filter_step(d, true),
+        KeyCode::Char('F') => filter_step(d, false),
         KeyCode::Char('m') => {
             let hosts: Vec<String> = d.fleet.hosts.iter().map(|h| h.alias.clone()).collect();
             d.inbox.host = match &d.inbox.host {
@@ -1706,7 +1707,7 @@ pub(crate) fn hints(d: &Dash) -> Vec<(&'static str, &'static str)> {
                 "archive"
             },
         ),
-        ("⇥", "kind"),
+        ("f", "kind"),
         ("/", "search"),
         ("J", "journal"),
     ]);

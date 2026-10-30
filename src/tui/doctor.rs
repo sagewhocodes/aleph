@@ -753,7 +753,7 @@ pub(crate) fn draw(d: &mut Dash, f: &mut Frame, r: Rect, focused: bool) {
 }
 
 fn draw_list(d: &mut Dash, f: &mut Frame, r: Rect, focused: bool, wide: bool) {
-    // the title carries the arrangement as a strip: the one shown lit, ⇥ for the other
+    // the title carries the arrangement as a strip: the one shown lit, v for the other
     let mut title = vec![Span::raw(match &d.flag {
         Some(h) => format!("Doctor · {h}"),
         None => "Doctor".into(),
@@ -775,7 +775,7 @@ fn draw_list(d: &mut Dash, f: &mut Frame, r: Rect, focused: bool, wide: bool) {
             },
         ));
     }
-    title.push(Span::styled("  ⇥", ui::faint()));
+    title.push(Span::styled("  v", ui::faint()));
     let mut block = ui::panel(ratatui::text::Line::from(title), focused)
         .title_bottom(summary(d, r.width.saturating_sub(4) as usize));
     if !wide {

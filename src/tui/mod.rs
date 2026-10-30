@@ -1204,20 +1204,20 @@ impl Dash {
 
     // ------------------------------------------------------------ views
 
-    /// ⇥ / ⇧⇥ in a view: its next / previous sub-heading.
-    pub(crate) fn sub_step(&mut self, fwd: bool) {
-        match self.view {
-            View::Monitor => monitor::sub_step(self, fwd),
-            View::Inbox => inbox::filter_step(self, fwd),
-            View::Settings => settings::sub_step(self, fwd),
-            // no sub-headings here (Fleet, Focus / Tile): the next tab
-            _ => {
-                let here = self.tab_active();
-                let i = View::ALL.iter().position(|v| *v == here).unwrap_or(0);
-                let n = View::ALL.len();
-                self.switch(View::ALL[if fwd { (i + 1) % n } else { (i + n - 1) % n }]);
-            }
+    /// ⇥ / ⇧⇥: the next / previous view, wherever you are. Focus (or Tile) is
+    /// among them once it's open, after Fleet: the way back to it, keys Aleph's.
+    pub(crate) fn view_step(&mut self, fwd: bool) {
+        let mut cycle = View::ALL.to_vec();
+        if !self.wall.windows.is_empty() {
+            cycle.insert(1, View::Wall);
         }
+        let n = cycle.len();
+        let i = cycle.iter().position(|v| *v == self.view).unwrap_or(0);
+        let next = cycle[if fwd { (i + 1) % n } else { (i + n - 1) % n }];
+        if next == View::Wall {
+            self.wall.back = Some(self.view);
+        }
+        self.switch(next);
     }
 
     pub(crate) fn switch(&mut self, v: View) {
@@ -1658,11 +1658,12 @@ impl Dash {
                 }
                 return None;
             }
-            // ⇥ / ⇧⇥: the next / previous sub-heading wherever you are —
-            // Monitor's views, the Inbox's filters, Settings' sections (the
-            // Doctor's arrangement while its list has focus); 1–4 switch views
+            // ⇥ / ⇧⇥: the next / previous view, everywhere (popups, forms and
+            // typing into an agent never get here). What was under it: Monitor's
+            // pages ← →, the Inbox's filters f F, Settings' sections [ ], the
+            // Doctor's arrangement v
             KeyCode::Tab | KeyCode::BackTab => {
-                self.sub_step(k.code == KeyCode::Tab);
+                self.view_step(k.code == KeyCode::Tab);
                 return None;
             }
             KeyCode::Char('q') if self.view == View::Fleet => return Some(Handoff::Quit),
@@ -2459,10 +2460,7 @@ impl Dash {
             top.extend(self.breadcrumb());
         }
         let used: usize = top.iter().map(|s| ui::width(&s.content)).sum();
-        let hint = format!(
-            "1–{} views · ⇥ sub-views · ? keys · ctrl+k palette ",
-            View::ALL.len()
-        );
+        let hint = format!("1–{} · ⇥ views · ? keys · ctrl+k palette ", View::ALL.len());
         // agents waiting on you: the approval board's key, ahead of the hint
         let waiting = self.fleet.sessions().iter().filter(|s| s.blocked()).count();
         // (showcase mode: that room is its tagline's)

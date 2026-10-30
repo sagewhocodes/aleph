@@ -157,9 +157,9 @@ pub(crate) fn entries(d: &Dash) -> Vec<Entry> {
     });
     v.push(e(
         "⇥",
-        "the next sub-view (Monitor's views, Inbox kinds, Settings sections)",
+        "the next view: Fleet, Focus while it's open, Monitor, Inbox, Settings (⇧⇥ the previous)",
         "Everywhere",
-        Run::Note("press ⇥ in Monitor, Inbox or Settings"),
+        Run::Note("press ⇥"),
     ));
     for (k, w, words) in [
         (
@@ -323,10 +323,10 @@ pub(crate) fn entries(d: &Dash) -> Vec<Entry> {
         )
     });
     v.push(e(
-        "⇥",
-        "Monitor: the next view (overview, processes, usage, …)",
+        "→",
+        "Monitor: the next page (overview, processes, usage, …)",
         "Monitor",
-        mon(KeyCode::Tab),
+        mon(KeyCode::Right),
     ));
     v.push(e(
         "]",
@@ -411,10 +411,16 @@ pub(crate) fn entries(d: &Dash) -> Vec<Entry> {
         st(KeyCode::Char('/')),
     ));
     v.push(e(
-        "⇥",
-        "Settings: the next section (the Doctor: by machine ⇄ by agent)",
+        "]",
+        "Settings: the next section",
         "Settings",
-        st(KeyCode::Tab),
+        st(KeyCode::Char(']')),
+    ));
+    v.push(e(
+        "v",
+        "Settings › Doctor: by machine ⇄ by agent",
+        "Settings",
+        st(KeyCode::Char('v')),
     ));
     v.push(e(
         "f",
@@ -681,8 +687,8 @@ pub(crate) fn lines(d: &Dash) -> Vec<Line<'static>> {
         super::digit(super::View::Monitor)
     )));
     v.push(row(
-        "⇥ · ←→".into(),
-        "the next view (overview, processes, usage, …)",
+        "←→".into(),
+        "the next page (overview, processes, usage, …)",
     ));
     v.push(row(
         "[ ] · ctrl+[ ] · ( ) · ↑↓".into(),
