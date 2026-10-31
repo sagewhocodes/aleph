@@ -3,9 +3,9 @@
 //! wall clock ([`apply`]): a graph holds still until its next bucket closes, and
 //! leaving the view and coming back finds it as it was.
 //!
-//! The daemon always samples, one quiet stream a machine every 30 s ([`Keeper`]; a
-//! daemon that isn't the hub, only its own machine), and appends what it read to
-//! `stats/<machine>.jsonl`, which a dashboard reads into its own rings. So the hours before a dashboard opened are there too, and
+//! The hub's daemon always samples, one quiet stream a machine every 30 s ([`Keeper`];
+//! a daemon without the hub lock never gets that far, in `watch.rs`), and appends what
+//! it read to `stats/<machine>.jsonl`, which a dashboard reads into its own rings. So the hours before a dashboard opened are there too, and
 //! a deploy loses nothing. With no daemon, history starts when the dashboard does.
 
 use crate::config::Config;
@@ -267,9 +267,9 @@ pub fn keep_buckets(cfg: &Config, host: &str) -> usize {
 }
 
 /// The machines with a stream kept for their history: none with `stats = off`, and
-/// never a paused one (Aleph doesn't talk to those) or one keeping nothing. A daemon
-/// on a machine that isn't the hub (`hub.machine`) keeps only its own: the hub reads
-/// every machine, and they needn't all read each other as well.
+/// never a paused one (Aleph doesn't talk to those) or one keeping nothing. Off the
+/// hub's computer (`hub.machine`), at most this one: nothing reaches this there today,
+/// since only the hub lock's holder keeps history, and this keeps it that way.
 pub fn wanted(cfg: &Config, hosts: &[String]) -> Vec<String> {
     if cfg.get_or("stats") == "off" {
         return Vec::new();
