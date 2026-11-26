@@ -151,7 +151,8 @@ impl Splashes {
                 return (k, seed, None);
             }
             if t < total + GAP {
-                return (k, seed, (t < total).then(|| splash::story(t, len)));
+                let opts = self.opts(cfg, seed);
+                return (k, seed, (t < total).then(|| splash::story(k, opts, t, len)));
             }
             t -= total + GAP;
         }

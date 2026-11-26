@@ -187,27 +187,33 @@ pub(crate) fn len_of(cfg: &Config) -> Option<u64> {
     crate::log::parse_duration(&v).map(|d| (d.as_millis() as u64).clamp(1000, 8000))
 }
 
-/// `auto` plays every splash 15% quicker than its moments are written: on
-/// screen it lasts `PACE` of its story. A length you set (`ui.splash_ms`,
-/// `--ms`) is kept as it is.
+/// `auto` plays every splash brisker than its moments are written: 15%
+/// quicker, and never longer than `AUTO_MS` on screen, the logo and all (the
+/// cosmos' 3 s story plays in 2). A length you set (`ui.splash_ms`, `--ms`)
+/// is kept as it is.
 const PACE: f64 = 0.85;
+const AUTO_MS: f64 = 2000.0;
 
-fn pace(len: Option<u64>) -> f64 {
+/// Screen time per moment of the story (1: as written).
+fn pace(kind: Kind, opts: Opts, len: Option<u64>) -> f64 {
     if len.is_some() {
-        1.0
-    } else {
-        PACE
+        return 1.0;
     }
+    let t = total(kind, opts, None) as f64;
+    if t <= 0.0 {
+        return PACE;
+    }
+    PACE.min(AUTO_MS / t)
 }
 
 /// How long `kind` is on screen (ms): its story's length at `auto`'s pace.
 pub(crate) fn played(kind: Kind, opts: Opts, len: Option<u64>) -> u64 {
-    (total(kind, opts, len) as f64 * pace(len)).round() as u64
+    (total(kind, opts, len) as f64 * pace(kind, opts, len)).round() as u64
 }
 
 /// The moment of the story `ms` of screen time in (what `frame` draws).
-pub(crate) fn story(ms: u64, len: Option<u64>) -> u64 {
-    (ms as f64 / pace(len)).round() as u64
+pub(crate) fn story(kind: Kind, opts: Opts, ms: u64, len: Option<u64>) -> u64 {
+    (ms as f64 / pace(kind, opts, len)).round() as u64
 }
 
 /// How long `kind`'s story is with `opts` (`len`: `ui.splash_ms`), in ms.
@@ -549,7 +555,7 @@ pub(crate) fn play(
         let spin = ui::spinner(t0);
         let drawn = tui.term.draw(|f| {
             let area = f.area();
-            let at = story(ms, len);
+            let at = story(kind, opts, ms, len);
             frame(kind, f.buffer_mut(), area, at, seed, info, spin, opts, len);
             ui::ground(f.buffer_mut());
             crate::showcase::buffer(f.buffer_mut());
@@ -3004,24 +3010,36 @@ mod tests {
         assert!(seen.len() >= 5, "{seen:?}");
     }
 
-    /// `auto` plays each 15% quicker than its story is written, ending on its
-    /// last moment; a length you set is kept.
+    /// `auto` plays each 15% quicker than its story is written and in 2 s at
+    /// most, ending on its last moment; a length you set is kept.
     #[test]
-    fn auto_plays_every_splash_fifteen_percent_quicker() {
+    fn auto_plays_every_splash_quicker_and_in_two_seconds_at_most() {
         let opts = Opts {
             end: End::Form,
             fx: Fx::parse("all"),
             hold: HOLD,
             logo: true,
         };
+        let bare = Opts {
+            logo: false,
+            end: End::Fall,
+            ..opts
+        };
         for k in [Kind::Cockpit, Kind::Classic].into_iter().chain(scenes()) {
-            let t = total(k, opts, None);
-            let p = played(k, opts, None);
-            assert_eq!(p, (t as f64 * 0.85).round() as u64, "{k:?}");
-            assert!(story(p, None).abs_diff(t) <= 1, "{k:?}");
-            assert_eq!(played(k, opts, Some(4000)), total(k, opts, Some(4000)));
-            assert_eq!(story(1234, Some(4000)), 1234);
+            for o in [opts, bare] {
+                let t = total(k, o, None);
+                let p = played(k, o, None);
+                let want = (t as f64 * 0.85).min(2000.0).round() as u64;
+                assert_eq!(p, want, "{k:?}");
+                assert!(p <= 2000, "{k:?}: {p}");
+                assert!(story(k, o, p, None).abs_diff(t) <= 1, "{k:?}");
+                assert_eq!(played(k, o, Some(4000)), total(k, o, Some(4000)));
+                assert_eq!(story(k, o, 1234, Some(4000)), 1234);
+            }
         }
+        // the cosmos: 3 s of story in 2
+        let k = scenes()[0];
+        assert_eq!(played(k, bare, None), 2000);
     }
 
     #[test]
