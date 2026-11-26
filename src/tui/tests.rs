@@ -1264,6 +1264,13 @@ fn big_dash() -> Dash {
 /// that turns quadratic). `PERF=1 cargo test perf -- --nocapture` prints them.
 #[test]
 fn perf_big_fleet_frames() {
+    // a CI runner is shared and slow: three times the room there (a debug
+    // Fleet frame took 60.3 ms on one); still enough to catch quadratic
+    let room = if std::env::var_os("CI").is_some() {
+        3
+    } else {
+        1
+    };
     let mut d = big_dash();
     let views = [View::Fleet, View::Monitor, View::Inbox, View::Settings];
     for v in views {
@@ -1279,7 +1286,7 @@ fn perf_big_fleet_frames() {
             eprintln!("{v:?}: {per:?} per frame");
         }
         assert!(
-            per < std::time::Duration::from_millis(60),
+            per < std::time::Duration::from_millis(60 * room),
             "{v:?}: {per:?} per frame"
         );
     }
@@ -1293,7 +1300,10 @@ fn perf_big_fleet_frames() {
     if std::env::var_os("PERF").is_some() {
         eprintln!("fleet rows: {per:?}");
     }
-    assert!(per < std::time::Duration::from_millis(5), "rows: {per:?}");
+    assert!(
+        per < std::time::Duration::from_millis(5 * room),
+        "rows: {per:?}"
+    );
 }
 
 #[test]
