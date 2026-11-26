@@ -60,7 +60,10 @@ jobs:
             v=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
             tag="v$v" ref=$GITHUB_SHA
             # a new version, or a release that has no files yet: release it
-            files=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq '.assets | length' 2>/dev/null || echo none)
+            # (gh api prints GitHub's 404 body on stdout: only its exit status says "none")
+            if ! files=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq '.assets | length' 2>/dev/null); then
+              files=none
+            fi
             if [ "$files" = none ] || [ "$files" = 0 ]; then publish=true; else publish=false; fi
             echo "$tag: release files $files → publish $publish"
           fi
