@@ -1480,8 +1480,13 @@ impl Dash {
         // (a terminal that passes Cmd+C on would type a c, or start a window)
         if k.modifiers.contains(KeyModifiers::SUPER) {
             // (Cmd+K: the terminal has just cleared the screen, if it passed
-            // the key on at all — drawn whole again, the key goes nowhere)
+            // the key on at all — drawn whole again, the key goes nowhere,
+            // and a blip says so)
             self.whole_now = true;
+            if matches!(k.code, KeyCode::Char('k') | KeyCode::Char('K')) {
+                self.toast(Level::Info, "cmd+k ignored");
+                return None;
+            }
             if matches!(k.code, KeyCode::Char('c') | KeyCode::Char('C'))
                 && !(self.view == View::Wall && wall::copy_selection(self))
             {

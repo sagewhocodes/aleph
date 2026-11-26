@@ -6126,8 +6126,9 @@ fn a_click_on_another_tile_focuses_it_and_the_keys_follow() {
 }
 
 /// Cmd+K: most Mac terminals clear the screen themselves and say nothing.
-/// The key does nothing here (k would have moved up), and the next frame is
-/// drawn whole, as it is every second anyway.
+/// When it does reach Aleph, the key does nothing (k would have moved up)
+/// but a blip saying so, and the next frame is drawn whole, as it is every
+/// second anyway.
 #[test]
 fn cmd_k_does_nothing_but_draw_the_screen_whole() {
     let mut d = dash();
@@ -6140,6 +6141,14 @@ fn cmd_k_does_nothing_but_draw_the_screen_whole() {
     assert!(d.whole_now);
     assert_eq!(d.fv.sel, sel);
     assert!(matches!(d.mode, Mode::Normal));
+    assert!(render(&mut d, 120, 30).contains("cmd+k ignored"));
+    // typing into an agent: nothing goes to it, the same blip
+    wall::focus_on(&mut d, "b31|w1:p1", View::Fleet);
+    assert!(d.wall.typing);
+    assert!(d
+        .on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::SUPER))
+        .is_none());
+    assert!(d.wall.typing && d.wall.compose.is_none());
 }
 
 /// A whole frame puts back what the terminal wiped, and clears what went
