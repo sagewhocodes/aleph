@@ -513,6 +513,7 @@ pub(crate) fn click(d: &mut Dash, i: usize, double: bool) -> Option<Handoff> {
 
 fn attach(d: &mut Dash) -> Option<Handoff> {
     let s = selected_session(d)?;
+    super::palette::went_to(d, &s.key());
     Some(Handoff::Attach {
         target: d.target_of(&s.host),
         pane: s.pane_id.clone(),

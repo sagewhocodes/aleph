@@ -199,6 +199,10 @@ struct SessionRow {
     state: String,
     state_col: Color,
     pinned: bool,
+    /// the one you were last in (`last_of`): first, under LAST
+    last: bool,
+    /// where it sits among the rest with nothing typed (`state_rank`)
+    rank: u8,
     /// what it's been doing, said under the list for the one you're on
     trail: String,
 }
@@ -207,6 +211,7 @@ struct SessionRow {
 #[derive(Clone, Copy, PartialEq)]
 enum Part {
     Top,
+    Last,
     Pinned,
     Sessions,
     Actions,
@@ -224,6 +229,88 @@ struct Widths {
 /// its pane.
 fn pin_of(host: &str, s: &crate::herdr::Session) -> String {
     format!("{host}:{}", s.display())
+}
+
+/// How many sessions you were last in are remembered.
+const RECENT: usize = 8;
+
+/// Where they're kept: `state/recent-sessions`, a key (`host|pane`) a line,
+/// newest first.
+fn recent_file() -> std::path::PathBuf {
+    crate::config::world_state().join("recent-sessions")
+}
+
+/// The sessions you were last in, as the last dashboard left them.
+pub(crate) fn recent_load() -> Vec<String> {
+    if cfg!(test) {
+        return Vec::new();
+    }
+    std::fs::read_to_string(recent_file())
+        .map(|t| {
+            t.lines()
+                .filter(|l| l.contains('|'))
+                .take(RECENT)
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// You went to this session (Focus, a step to it there, attaching in herdr):
+/// from anywhere else, ctrl+k offers it first.
+pub(crate) fn went_to(d: &mut Dash, key: &str) {
+    if d.recent.first().map(String::as_str) == Some(key) {
+        return;
+    }
+    d.recent.retain(|k| k != key);
+    d.recent.insert(0, key.to_string());
+    d.recent.truncate(RECENT);
+    if !cfg!(test) {
+        let _ = crate::config::write_atomic(&recent_file(), d.recent.join("\n").as_bytes());
+    }
+}
+
+/// The session you were last in, other than the one in front of you now
+/// (in Focus that's the one before it), if it's still there.
+fn last_of(d: &Dash) -> Option<String> {
+    let here = if d.view == View::Wall {
+        super::wall::focused_session(d).map(|s| s.key())
+    } else {
+        None
+    };
+    d.recent
+        .iter()
+        .find(|k| Some(*k) != here.as_ref() && super::fleet::session(d, k).is_some())
+        .cloned()
+}
+
+/// Where a session sits with nothing typed: running first (working, then
+/// waiting for you), then done, then idle; at a limit, paused or anything
+/// else after them.
+fn state_rank(d: &Dash, s: &crate::herdr::Session) -> u8 {
+    if d.fleet.host(&s.host).is_some_and(|h| h.paused) {
+        return 5;
+    }
+    if s.limit.is_some() {
+        return 4;
+    }
+    match s.status.as_str() {
+        "working" => 0,
+        "blocked" => 1,
+        "done" => 2,
+        "idle" => 3,
+        _ => 5,
+    }
+}
+
+/// The heading over a rank's sessions, and its colour.
+fn rank_heading(rank: u8) -> (&'static str, Color) {
+    match rank {
+        0 | 1 => ("Running", c::BLUE()),
+        2 => ("Done", c::GREEN()),
+        3 => ("Idle", c::MUTED()),
+        _ => ("Other", c::MUTED()),
+    }
 }
 
 fn pins(d: &Dash) -> Vec<String> {
@@ -602,6 +689,7 @@ impl Palette {
         }
         // pinned sessions on top of everything, in the order they were pinned
         let pinned = pins(d);
+        let last = last_of(d);
         let mut on_top: Vec<(usize, (Item, String, String, Color))> = Vec::new();
         let mut session_rows = std::collections::HashMap::new();
         for h in &d.fleet.hosts {
@@ -624,6 +712,8 @@ impl Palette {
                         state,
                         state_col,
                         pinned: at.is_some(),
+                        last: last.as_deref() == Some(s.key().as_str()),
+                        rank: state_rank(d, s),
                         trail: trail_of(d, s),
                     },
                 );
@@ -1084,28 +1174,37 @@ impl Palette {
                 .map(|(i, _)| i)
                 .collect()
         };
-        let is_pinned = |it: &Item| matches!(it, Item::Session(k) if session_rows.get(k).is_some_and(|r: &SessionRow| r.pinned));
+        let row = |it: &Item| match it {
+            Item::Session(k) => session_rows.get(k),
+            _ => None,
+        };
+        let is_last = |it: &Item| row(it).is_some_and(|r: &SessionRow| r.last);
+        let is_pinned = |it: &Item| !is_last(it) && row(it).is_some_and(|r| r.pinned);
         let top = |it: &Item| matches!(it, Item::Restart | Item::LeaveFocus | Item::StopTyping);
         let mut shelf = of(&top);
+        // the one you were last in, then what you pinned
+        shelf.extend(of(&is_last));
         shelf.extend(of(&is_pinned));
-        // (by machine, as the fleet lists them)
-        for h in &d.fleet.hosts {
-            shelf.extend(of(&|it| {
-                !is_pinned(it)
-                    && matches!(it, Item::Session(k) if session_rows.get(k).is_some_and(|r| r.host == h.alias))
-            }));
-        }
+        // the rest by what they're doing: running, done, idle, the others
+        // (each lot by machine, as the fleet lists them)
+        let mut rest = of(&|it| row(it).is_some_and(|r| !r.last && !r.pinned));
+        rest.sort_by_key(|i| (row(&items[*i].0).map_or(u8::MAX, |r| r.rank), *i));
+        shelf.extend(rest);
         shelf.extend(of(&|it| {
             !top(it)
                 && (on_the_shelf(it, here_host.as_deref())
                     || (waiting_now && matches!(it, Item::Approvals)))
         }));
-        // the cursor starts on the session you're on: enter is Focus on it
-        let sel = match (&d.fv.sel, d.view) {
-            (Some(RowId::Sess(k)), View::Fleet) => shelf
+        // in Fleet the cursor starts on the one you were last in (enter goes
+        // back to it), else on the session you're on (enter is Focus on it)
+        let at = |k: &str| {
+            shelf
                 .iter()
                 .position(|i| matches!(&items[*i].0, Item::Session(x) if x == k))
-                .unwrap_or(0),
+        };
+        let sel = match (&d.fv.sel, d.view) {
+            (_, View::Fleet) if last.is_some() => last.as_deref().and_then(at).unwrap_or(0),
+            (Some(RowId::Sess(k)), View::Fleet) => at(k).unwrap_or(0),
             _ => 0,
         };
         Palette {
@@ -1128,6 +1227,7 @@ impl Palette {
     fn part_of(&self, i: usize) -> Part {
         match &self.items[i].0 {
             Item::Restart | Item::LeaveFocus | Item::StopTyping => Part::Top,
+            Item::Session(k) if self.rows.get(k).is_some_and(|r| r.last) => Part::Last,
             Item::Session(k) if self.rows.get(k).is_some_and(|r| r.pinned) => Part::Pinned,
             Item::Session(_) => Part::Sessions,
             _ => Part::Actions,
@@ -1347,11 +1447,12 @@ impl Palette {
         let room = inner.height.saturating_sub(4) as usize;
         let ranked = self.ranked();
         let shelf = self.shelf.is_some() && self.q.text.trim().is_empty();
-        let widths = self.widths(&ranked, inner.width as usize, !shelf);
+        // (the machine on every line: the list goes by state, not machine)
+        let widths = self.widths(&ranked, inner.width as usize, true);
         let mut body: Vec<Line> = Vec::new();
         let mut at = 0;
         let mut part: Option<Part> = None;
-        let mut host: Option<String> = None;
+        let mut group: Option<&'static str> = None;
         for (n, (i, pos)) in ranked.iter().enumerate() {
             let (item, title, sub, col) = &self.items[*i];
             let on = n == self.sel;
@@ -1363,9 +1464,10 @@ impl Palette {
                 let this = self.part_of(*i);
                 if part != Some(this) {
                     part = Some(this);
-                    host = None;
+                    group = None;
                     let word = match this {
                         Part::Top => None,
+                        Part::Last => Some("LAST"),
                         Part::Pinned => Some("PINNED"),
                         Part::Sessions => Some("SESSIONS"),
                         Part::Actions => Some("ACTIONS"),
@@ -1377,13 +1479,14 @@ impl Palette {
                         )));
                     }
                 }
-                // under SESSIONS, a heading for each machine
+                // under SESSIONS, a heading for running, done, idle, the others
                 if let (Part::Sessions, Some(r)) = (this, session) {
-                    if host.as_deref() != Some(r.host.as_str()) {
-                        host = Some(r.host.clone());
+                    let (word, col) = rank_heading(r.rank);
+                    if group != Some(word) {
+                        group = Some(word);
                         body.push(Line::from(vec![
-                            Span::styled(" ▌", ui::fg(r.host_col)),
-                            Span::styled(r.host.clone(), ui::fg(r.host_col)),
+                            Span::styled(" ▌", ui::fg(col)),
+                            Span::styled(word, ui::fg(col)),
                         ]));
                     }
                 }

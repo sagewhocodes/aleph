@@ -1617,6 +1617,7 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
                 d.toast(Level::Info, "that session isn't running now");
                 return None;
             };
+            super::palette::went_to(d, &s.key());
             return Some(Handoff::Attach {
                 target: d.target_of(&s.host),
                 pane: s.pane_id.clone(),

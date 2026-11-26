@@ -852,20 +852,68 @@ fn lay_of(d: &Dash) -> usize {
 }
 
 /// Focus: one session fullscreen (the window `focus`, reused), with the
-/// message bar, queue, approve and keys; esc goes back to `from`.
+/// message bar, queue, approve and keys; esc goes back to `from`. A window of
+/// your own that already shows it (one you named) is where it opens instead,
+/// as you left it: never a second view of the same session.
 pub(crate) fn focus_on(d: &mut Dash, key: &str, from: View) {
     enter(d);
+    super::palette::went_to(d, key);
     d.wall.drop_window(FOCUS);
-    d.wall
-        .new_window(FOCUS, vec![Content::Session(key.to_string())], 0);
-    if let Some(w) = d.wall.win_mut() {
-        w.zoom = true;
+    if let Some((i, id)) = own_window_with(&d.wall, key) {
+        d.wall.cur = i;
+        if let Some(w) = d.wall.win_mut() {
+            w.focus = id;
+        }
+        d.wall.dirty = true;
+    } else {
+        d.wall
+            .new_window(FOCUS, vec![Content::Session(key.to_string())], 0);
+        if let Some(w) = d.wall.win_mut() {
+            w.zoom = true;
+        }
     }
     d.wall.back = Some(from);
     d.wall.back_to_board = false;
     d.switch(View::Wall);
     // keys straight to the agent, as in its own terminal (`focus.keys`)
     d.wall.typing = d.cfg.get_or("focus.keys") != "aleph";
+}
+
+/// A window of yours (not Focus or Tile) with this session in it, and its
+/// pane there: one where it's on its own first.
+fn own_window_with(st: &State, key: &str) -> Option<(usize, u32)> {
+    let mut any = None;
+    for (i, w) in st.windows.iter().enumerate() {
+        if w.name == FOCUS || w.name == TILE {
+            continue;
+        }
+        let leaves = w.root.leaves();
+        let Some(id) = leaves.iter().copied().find(|id| {
+            st.panes
+                .get(id)
+                .is_some_and(|p| matches!(&p.content, Content::Session(k) if k == key))
+        }) else {
+            continue;
+        };
+        if leaves.len() == 1 {
+            return Some((i, id));
+        }
+        any.get_or_insert((i, id));
+    }
+    any
+}
+
+/// What a window's tab says: Focus by the session in it, the rest by name.
+pub(crate) fn tab_name(d: &Dash, i: usize) -> String {
+    let Some(w) = d.wall.windows.get(i) else {
+        return String::new();
+    };
+    if w.name == FOCUS {
+        if let Some(s) = session_of(d, w.focus) {
+            return s.display().to_string();
+        }
+    }
+    w.name.clone()
 }
 
 /// `w` with nothing marked: back to the Tile you arranged, if there is one.
@@ -961,6 +1009,7 @@ fn focus_step(d: &mut Dash, fwd: bool, needy: bool) {
 
 /// The focused pane shows this session instead.
 fn show_in_focus(d: &mut Dash, key: String) {
+    super::palette::went_to(d, &key);
     if let Some(id) = d.wall.focus() {
         if let Some(p) = d.wall.panes.get_mut(&id) {
             p.content = Content::Session(key);
@@ -1506,6 +1555,7 @@ pub(crate) fn jump_to(d: &mut Dash, key: &str) {
             .map(|id| (i, id))
     });
     if let Some((i, id)) = found {
+        super::palette::went_to(d, key);
         d.wall.cur = i;
         if let Some(w) = d.wall.win_mut() {
             w.focus = id;
@@ -1575,6 +1625,8 @@ pub(crate) fn run(d: &mut Dash, cmd: Cmd) {
         }
     }
     let was_focus = d.wall.win().is_some_and(|w| w.name == FOCUS);
+    // (renaming starts from what its tab says: Focus's, its session's name)
+    let shown = tab_name(d, d.wall.cur);
     let st = &mut d.wall;
     match cmd {
         Cmd::SplitSide | Cmd::SplitStack => {
@@ -1652,8 +1704,7 @@ pub(crate) fn run(d: &mut Dash, cmd: Cmd) {
             st.cur = st.cur.min(st.windows.len().saturating_sub(1));
         }
         Cmd::Rename => {
-            let n = st.win().map(|w| w.name.clone()).unwrap_or_default();
-            st.renaming = Some(forms::Field::new(&n));
+            st.renaming = Some(forms::Field::new(&shown));
         }
         Cmd::NextLayout => {
             let mut name = "";
@@ -2297,6 +2348,7 @@ pub(crate) fn on_key(d: &mut Dash, k: KeyEvent) -> Option<Handoff> {
                 d.mode = Mode::Palette(super::palette::Palette::sessions_only(d));
                 return None;
             };
+            super::palette::went_to(d, &s.key());
             return Some(Handoff::Attach {
                 target: d.target_of(&s.host),
                 pane: s.pane_id.clone(),
@@ -3812,11 +3864,12 @@ fn status_bar(d: &mut Dash, f: &mut Frame, r: Rect) {
     }
     let mut x = r.x + ui::width(&tag) as u16 + 1;
     let mut tabs = Vec::new();
-    for (i, w) in d.wall.windows.iter().enumerate() {
+    let names: Vec<String> = (0..d.wall.windows.len()).map(|i| tab_name(d, i)).collect();
+    for (i, name) in names.iter().enumerate() {
         let on = i == d.wall.cur;
         let label = match (on, &d.wall.renaming) {
             (true, Some(f)) => format!(" {i}:{}▏ ", f.text),
-            _ => format!(" {i}:{}{} ", w.name, if on { "*" } else { "" }),
+            _ => format!(" {i}:{}{} ", name, if on { "*" } else { "" }),
         };
         let wdt = ui::width(&label) as u16;
         tabs.push((Rect::new(x, r.y, wdt, 1), i));

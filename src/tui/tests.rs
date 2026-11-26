@@ -156,6 +156,7 @@ fn dash() -> Dash {
         focused: true,
         whole_at: Instant::now(),
         whole_now: false,
+        recent: Vec::new(),
         onscreen_at: None,
         changed: crate::refresh::Watch::new(),
         ungated: false,
@@ -778,10 +779,11 @@ fn the_palette_finds_a_session_by_machine_and_agent_in_any_order() {
     assert!(s.contains("12 tests passed"), "{s}");
 }
 
-/// Before you type: your sessions by machine, one aligned line each, then a few
-/// actions. The rest comes with typing.
+/// Before you type: your sessions by what they're doing (running, done, idle),
+/// one aligned line each with its machine, then a few actions. The rest comes
+/// with typing.
 #[test]
-fn ctrl_k_shows_sessions_by_machine_then_a_few_actions() {
+fn ctrl_k_shows_sessions_by_state_then_a_few_actions() {
     use crate::usage::dash::{Data, Live};
     let mut d = dash();
     let _ = render(&mut d, 150, 40);
@@ -804,7 +806,14 @@ fn ctrl_k_shows_sessions_by_machine_then_a_few_actions() {
     d.mode = Mode::Palette(palette::Palette::new(&d));
     let s = render(&mut d, 150, 40);
     assert!(s.contains("SESSIONS") && s.contains("ACTIONS"), "{s}");
-    assert!(s.contains("▌b31") && s.contains("▌gpu2"), "{s}");
+    // running first (working, then waiting for you), then done; the machine
+    // on each line
+    let at = |w: &str| s.find(w).unwrap_or_else(|| panic!("no {w}: {s}"));
+    assert!(at("▌Running") < at("claude_ignite"), "{s}");
+    assert!(at("claude_ignite") < at("claude_temper"), "{s}");
+    assert!(at("claude_temper") < at("▌Done"), "{s}");
+    assert!(at("▌Done") < at("claude_weave"), "{s}");
+    assert!(s.contains("[b31]") && s.contains("[gpu2]"), "{s}");
     assert!(s.contains("OpenCode") && s.contains("kimi-k2.5"), "{s}");
     // a few actions, not every machine's and every page
     assert!(
@@ -6174,6 +6183,76 @@ fn a_whole_frame_restores_a_wiped_screen_and_clears_what_went_blank() {
         shown(&t, 1).trim(),
         "",
         "a cell that went blank stays drawn"
+    );
+}
+
+/// ctrl+k: the session you were last in comes first, under LAST, with the
+/// cursor on it in Fleet (enter goes back); in Focus it's the one before.
+#[test]
+fn ctrl_k_offers_the_session_you_were_last_in_first() {
+    let mut d = dash_own();
+    let _ = render(&mut d, 150, 40);
+    let (a, b) = ("b31|w1:p1".to_string(), "b31|w1:p2".to_string());
+    wall::focus_on(&mut d, &b, View::Fleet);
+    d.switch(View::Fleet);
+    let p = palette::Palette::new(&d);
+    assert!(
+        matches!(p.chosen(), Some(palette::Item::Session(ref k)) if *k == b),
+        "{:?}",
+        p.chosen()
+    );
+    d.mode = Mode::Palette(p);
+    let s = render(&mut d, 150, 40);
+    let at = |w: &str| s.find(w).unwrap_or_else(|| panic!("no {w}: {s}"));
+    assert!(
+        at("LAST") < at("claude_temper") && at("claude_temper") < at("SESSIONS"),
+        "{s}"
+    );
+    d.mode = Mode::Normal;
+    // in Focus on another, LAST is the one you came from
+    wall::focus_on(&mut d, &a, View::Fleet);
+    assert_eq!(d.recent[..2], [a.clone(), b.clone()]);
+    d.mode = Mode::Palette(palette::Palette::new(&d));
+    let s = render(&mut d, 150, 40);
+    let lines: Vec<&str> = s.lines().collect();
+    let last = lines.iter().position(|l| l.contains(" LAST ")).expect(&s);
+    assert!(lines[last + 1].contains("claude_temper"), "{s}");
+}
+
+/// A session you gave a window of its own (named it) opens there from Fleet,
+/// name and all: no second Focus window showing the same thing. Focus's tab
+/// says which session it holds.
+#[test]
+fn a_session_opens_in_the_window_you_named_for_it() {
+    let mut d = dash_own();
+    let _ = render(&mut d, 150, 40);
+    let (a, b) = ("b31|w1:p1", "b31|w1:p2");
+    wall::focus_on(&mut d, a, View::Fleet);
+    let s = render(&mut d, 150, 40);
+    assert!(s.contains(" 0:claude_ignite* "), "{s}");
+    d.wall.windows[d.wall.cur].name = "mine".into();
+    d.switch(View::Fleet);
+    wall::focus_on(&mut d, a, View::Fleet);
+    assert_eq!(d.wall.windows.len(), 1);
+    assert_eq!(d.wall.windows[d.wall.cur].name, "mine");
+    // another session: Focus, beside it
+    d.switch(View::Fleet);
+    wall::focus_on(&mut d, b, View::Fleet);
+    assert_eq!(d.wall.windows.len(), 2);
+    assert!(d.wall.in_focus());
+    let s = render(&mut d, 150, 40);
+    assert!(
+        s.contains(" 0:mine ") && s.contains(" 1:claude_temper* "),
+        "{s}"
+    );
+    // and back: yours again, Focus gone
+    d.switch(View::Fleet);
+    wall::focus_on(&mut d, a, View::Fleet);
+    assert_eq!(d.wall.windows.len(), 1);
+    assert_eq!(d.wall.windows[d.wall.cur].name, "mine");
+    assert_eq!(
+        wall::focused_session(&d).map(|s| s.key()),
+        Some(a.to_string())
     );
 }
 

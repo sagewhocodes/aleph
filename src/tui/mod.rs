@@ -534,6 +534,8 @@ pub struct Dash {
     /// must be (`WHOLE_EVERY`)
     whole_at: Instant,
     pub(crate) whole_now: bool,
+    /// the sessions you were last in, newest first (ctrl+k's LAST)
+    pub(crate) recent: Vec<String>,
     /// when the on-screen record was last written, and what it said
     onscreen_at: Option<(Instant, Vec<String>, bool)>,
     /// notes that a machine was just set up (`refresh.rs`): look at it again
@@ -619,6 +621,7 @@ impl Dash {
             focused: true,
             whole_at: Instant::now(),
             whole_now: false,
+            recent: palette::recent_load(),
             onscreen_at: None,
             changed: crate::refresh::Watch::new(),
             ungated: false,
