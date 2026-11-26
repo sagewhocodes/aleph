@@ -3,11 +3,12 @@
 ## 2.1.0 — 2026-10-31
 
 ### Small fixes
-- **The splash plays 15% quicker.** At `ui.splash_ms = auto` the cockpit takes 1.7 s, classic under 1 s, the cosmos 2.6 s.
-  A length you set is kept.
+- **The splash is quicker: 2 s at most.** At `ui.splash_ms = auto` every splash plays 15% quicker and never longer than
+  2 s, the logo included: the cosmos 2 s, the cockpit 1.7 s, classic under 1 s. A length you set is kept.
 - **Cmd+K no longer leaves the view blank.** Most Mac terminals clear the screen on Cmd+K without telling the program.
   Aleph now draws the whole screen again every second while the terminal has focus, at once after any Cmd key, and when
-  the focus comes back. The key itself does nothing in Aleph.
+  the focus comes back. When Cmd+K does reach Aleph, it does nothing and a small "cmd+k ignored" blip says so. Warp keeps
+  Cmd+K for its own Clear Blocks; clear that shortcut in Warp's settings and the key comes to Aleph instead.
 - **ctrl+k leads with the session you were last in,** under LAST, with the cursor on it from Fleet: ctrl+k then enter
   goes back. In Focus it's the one before the session on screen. Then come pinned sessions, then the rest by what
   they're doing: running (working, then waiting for you), done, idle. Each line names its machine.

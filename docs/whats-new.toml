@@ -10,6 +10,19 @@
 # only a build with that feature carries them.
 
 [[entry]]
+id = "2026-11-26-b"
+date = "2026-11-26"
+title = "A 2-second splash, Cmd+K says it's ignored"
+notes = [
+  "The splash takes 2 seconds at most.",
+  "Cmd+K does nothing in Aleph and says so with a small blip, in a terminal that passes it on. Warp keeps it for its own Clear Blocks unless you clear that shortcut in Warp's settings; Aleph puts the screen back within a second either way.",
+]
+commits = [
+  "The splash takes 2 s at most",
+  "Cmd+K that reaches Aleph says it was ignored",
+]
+
+[[entry]]
 id = "2026-11-26-a"
 date = "2026-11-26"
 title = "ctrl+k goes back, Cmd+K leaves the view alone"
