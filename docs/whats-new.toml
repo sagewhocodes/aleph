@@ -10,6 +10,22 @@
 # only a build with that feature carries them.
 
 [[entry]]
+id = "2026-11-26-a"
+date = "2026-11-26"
+title = "ctrl+k goes back, Cmd+K leaves the view alone"
+notes = [
+  "ctrl+k puts the session you were last in first, under LAST: from Fleet, ctrl+k then enter goes back to it. The rest follow by what they're doing: running, done, idle, each with its machine.",
+  "A session one of your windows already shows (one you renamed) opens there from Fleet, instead of in a second Focus window. Focus's tab is named after its session.",
+  "Cmd+K no longer leaves the screen blank: whatever the terminal wipes is drawn again within a second.",
+  "The splash plays 15% quicker.",
+]
+commits = [
+  "The splash plays 15% quicker",
+  "A screen the terminal wiped comes back: Cmd+K",
+  "ctrl+k leads with your last session; a session opens in your window for it",
+]
+
+[[entry]]
 id = "2.1.0"
 date = "2026-10-31"
 title = "Twelve hours of graphs, a timeline your way, Cursor's Agent SDK"

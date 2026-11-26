@@ -2,6 +2,19 @@
 
 ## 2.1.0 — 2026-10-31
 
+### Small fixes
+- **The splash plays 15% quicker.** At `ui.splash_ms = auto` the cockpit takes 1.7 s, classic under 1 s, the cosmos 2.6 s.
+  A length you set is kept.
+- **Cmd+K no longer leaves the view blank.** Most Mac terminals clear the screen on Cmd+K without telling the program.
+  Aleph now draws the whole screen again every second while the terminal has focus, at once after any Cmd key, and when
+  the focus comes back. The key itself does nothing in Aleph.
+- **ctrl+k leads with the session you were last in,** under LAST, with the cursor on it from Fleet: ctrl+k then enter
+  goes back. In Focus it's the one before the session on screen. Then come pinned sessions, then the rest by what
+  they're doing: running (working, then waiting for you), done, idle. Each line names its machine.
+- **A session opens in the window you made for it.** If one of your windows already shows the session (one you
+  renamed), opening it from Fleet goes there, name and all, instead of opening a second Focus window on the same
+  session. Focus's tab is now named after its session, and renaming starts from that name.
+
 ### herdr
 - **Polls use the connection that's already open.** Where Aleph already listens to a machine's events, its session list comes
   over that, with no new command on the machine. If that's unavailable, ssh answers as before.
