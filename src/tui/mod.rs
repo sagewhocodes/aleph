@@ -530,6 +530,10 @@ pub struct Dash {
     /// the terminal has focus (it says when it loses it; one that never
     /// says is taken to have it)
     pub(crate) focused: bool,
+    /// the screen drawn whole: when it last was, and whether the next frame
+    /// must be (`WHOLE_EVERY`)
+    whole_at: Instant,
+    pub(crate) whole_now: bool,
     /// when the on-screen record was last written, and what it said
     onscreen_at: Option<(Instant, Vec<String>, bool)>,
     /// notes that a machine was just set up (`refresh.rs`): look at it again
@@ -613,6 +617,8 @@ impl Dash {
             net: crate::net::Net::start(net_target, Duration::from_secs(5)),
             net_was: 0,
             focused: true,
+            whole_at: Instant::now(),
+            whole_now: false,
             onscreen_at: None,
             changed: crate::refresh::Watch::new(),
             ungated: false,
@@ -1470,6 +1476,9 @@ impl Dash {
         // Cmd + a key is never a command here, and never a letter for the agent
         // (a terminal that passes Cmd+C on would type a c, or start a window)
         if k.modifiers.contains(KeyModifiers::SUPER) {
+            // (Cmd+K: the terminal has just cleared the screen, if it passed
+            // the key on at all — drawn whole again, the key goes nowhere)
+            self.whole_now = true;
             if matches!(k.code, KeyCode::Char('c') | KeyCode::Char('C'))
                 && !(self.view == View::Wall && wall::copy_selection(self))
             {
@@ -2889,6 +2898,17 @@ impl Dash {
                 tui.term.backend_mut(),
                 crossterm::terminal::BeginSynchronizedUpdate
             );
+            // the terminal can wipe the screen behind our back (Cmd+K clears it
+            // in most Mac terminals, and the program isn't told): only what
+            // changed gets drawn, so the rest would stay blank. The next frame
+            // goes out whole after a Cmd key or the focus coming back, and every
+            // `WHOLE_EVERY` while the terminal has focus. Nothing is cleared
+            // first: it never flickers.
+            if self.whole_now || (self.focused && self.whole_at.elapsed() >= WHOLE_EVERY) {
+                draw_whole_next(&mut tui.term);
+                self.whole_now = false;
+                self.whole_at = Instant::now();
+            }
             tui.term.draw(|f| {
                 self.draw(f);
                 crate::logo::images::frame(f.buffer_mut());
@@ -2918,6 +2938,7 @@ impl Dash {
                     Event::Mouse(m) => self.on_mouse(m),
                     Event::FocusGained => {
                         self.focused = true;
+                        self.whole_now = true;
                         wall::take_back(self);
                         None
                     }
@@ -3137,6 +3158,29 @@ pub(crate) enum Act {
 }
 
 /// (action, config name, default keys, help)
+/// The next frame goes out whole, blank cells too: the last frame as the
+/// terminal was sent it is forgotten for a cell nothing ever draws, so every
+/// cell differs from it. (Forgotten as blank instead, a cell going blank in
+/// that same frame would never be cleared.)
+fn draw_whole_next<B: ratatui::backend::Backend>(term: &mut ratatui::Terminal<B>) {
+    // swap: the last frame is the buffer drawn into, emptied; filled with the
+    // never-drawn cell; swap back: that's now what the next frame is diffed
+    // against
+    term.swap_buffers();
+    let mut never = ratatui::buffer::Cell::default();
+    never.set_style(
+        Style::new().add_modifier(Modifier::HIDDEN | Modifier::RAPID_BLINK | Modifier::CROSSED_OUT),
+    );
+    for c in term.current_buffer_mut().content.iter_mut() {
+        *c = never.clone();
+    }
+    term.swap_buffers();
+}
+
+/// How often the whole screen is drawn again while the terminal has focus,
+/// whatever changed: what puts the view back after a terminal clears it.
+const WHOLE_EVERY: Duration = Duration::from_secs(1);
+
 pub(crate) const ACTS: &[(Act, &str, &str, &str)] = &[
     (Act::Up, "up", "k", "move up"),
     (Act::Down, "down", "j", "move down"),

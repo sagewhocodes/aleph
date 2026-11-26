@@ -154,6 +154,8 @@ fn dash() -> Dash {
         net_was: 0,
         new_build: false,
         focused: true,
+        whole_at: Instant::now(),
+        whole_now: false,
         onscreen_at: None,
         changed: crate::refresh::Watch::new(),
         ungated: false,
@@ -6112,6 +6114,67 @@ fn a_click_on_another_tile_focuses_it_and_the_keys_follow() {
     assert_eq!(d.wall.focused_session(&d).unwrap().pane_id, "w1:p2");
     click(&mut d, second);
     assert!(d.wall.typing, "the second click types");
+}
+
+/// Cmd+K: most Mac terminals clear the screen themselves and say nothing.
+/// The key does nothing here (k would have moved up), and the next frame is
+/// drawn whole, as it is every second anyway.
+#[test]
+fn cmd_k_does_nothing_but_draw_the_screen_whole() {
+    let mut d = dash();
+    let _ = render(&mut d, 120, 30);
+    let sel = d.fv.sel.clone();
+    d.whole_now = false;
+    assert!(d
+        .on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::SUPER))
+        .is_none());
+    assert!(d.whole_now);
+    assert_eq!(d.fv.sel, sel);
+    assert!(matches!(d.mode, Mode::Normal));
+}
+
+/// A whole frame puts back what the terminal wiped, and clears what went
+/// blank in that same frame (forgetting the last frame as blank would leave it).
+#[test]
+fn a_whole_frame_restores_a_wiped_screen_and_clears_what_went_blank() {
+    use ratatui::backend::{Backend, TestBackend};
+    let mut t = ratatui::Terminal::new(TestBackend::new(20, 3)).unwrap();
+    let shown = |t: &ratatui::Terminal<TestBackend>, y: u16| -> String {
+        (0..20)
+            .map(|x| t.backend().buffer()[(x, y)].symbol().to_string())
+            .collect()
+    };
+    let draw = |t: &mut ratatui::Terminal<TestBackend>, top: &str, mid: &str| {
+        t.draw(|f| {
+            f.render_widget(
+                Paragraph::new(vec![Line::raw(top.to_string()), Line::raw(mid.to_string())]),
+                f.area(),
+            );
+        })
+        .unwrap();
+    };
+    draw(&mut t, "fleet", "logo");
+    // the terminal clears itself (Cmd+K): nothing changed, nothing is sent
+    t.backend_mut().clear().unwrap();
+    draw(&mut t, "fleet", "logo");
+    assert_eq!(shown(&t, 0).trim(), "");
+    // drawn whole: back, and the line that went blank in the same frame is blank
+    draw(&mut t, "fleet", "logo");
+    super::draw_whole_next(&mut t);
+    draw(&mut t, "fleet", "");
+    assert_eq!(shown(&t, 0).trim(), "fleet");
+    super::draw_whole_next(&mut t);
+    draw(&mut t, "fleet", "");
+    assert_eq!(shown(&t, 1).trim(), "");
+    // and a wiped screen with a line gone blank since
+    draw(&mut t, "fleet", "logo");
+    super::draw_whole_next(&mut t);
+    draw(&mut t, "fleet", "");
+    assert_eq!(
+        shown(&t, 1).trim(),
+        "",
+        "a cell that went blank stays drawn"
+    );
 }
 
 #[test]
