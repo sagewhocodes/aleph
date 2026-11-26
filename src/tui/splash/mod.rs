@@ -187,7 +187,30 @@ pub(crate) fn len_of(cfg: &Config) -> Option<u64> {
     crate::log::parse_duration(&v).map(|d| (d.as_millis() as u64).clamp(1000, 8000))
 }
 
-/// How long `kind` plays with `opts` (`len`: `ui.splash_ms`), in ms.
+/// `auto` plays every splash 15% quicker than its moments are written: on
+/// screen it lasts `PACE` of its story. A length you set (`ui.splash_ms`,
+/// `--ms`) is kept as it is.
+const PACE: f64 = 0.85;
+
+fn pace(len: Option<u64>) -> f64 {
+    if len.is_some() {
+        1.0
+    } else {
+        PACE
+    }
+}
+
+/// How long `kind` is on screen (ms): its story's length at `auto`'s pace.
+pub(crate) fn played(kind: Kind, opts: Opts, len: Option<u64>) -> u64 {
+    (total(kind, opts, len) as f64 * pace(len)).round() as u64
+}
+
+/// The moment of the story `ms` of screen time in (what `frame` draws).
+pub(crate) fn story(ms: u64, len: Option<u64>) -> u64 {
+    (ms as f64 / pace(len)).round() as u64
+}
+
+/// How long `kind`'s story is with `opts` (`len`: `ui.splash_ms`), in ms.
 pub(crate) fn total(kind: Kind, opts: Opts, len: Option<u64>) -> u64 {
     match kind {
         Kind::Cockpit => {
@@ -502,7 +525,7 @@ pub(crate) fn play(
     use crossterm::event::{self, Event, KeyEventKind};
     let size = tui.term.size().unwrap_or_default();
     let kind = kind.fit(size.width, size.height);
-    let total = total(kind, opts, len);
+    let total = played(kind, opts, len);
     if total == 0 {
         return false;
     }
@@ -526,7 +549,8 @@ pub(crate) fn play(
         let spin = ui::spinner(t0);
         let drawn = tui.term.draw(|f| {
             let area = f.area();
-            frame(kind, f.buffer_mut(), area, ms, seed, info, spin, opts, len);
+            let at = story(ms, len);
+            frame(kind, f.buffer_mut(), area, at, seed, info, spin, opts, len);
             ui::ground(f.buffer_mut());
             crate::showcase::buffer(f.buffer_mut());
         });
@@ -2978,6 +3002,26 @@ mod tests {
             }
         }
         assert!(seen.len() >= 5, "{seen:?}");
+    }
+
+    /// `auto` plays each 15% quicker than its story is written, ending on its
+    /// last moment; a length you set is kept.
+    #[test]
+    fn auto_plays_every_splash_fifteen_percent_quicker() {
+        let opts = Opts {
+            end: End::Form,
+            fx: Fx::parse("all"),
+            hold: HOLD,
+            logo: true,
+        };
+        for k in [Kind::Cockpit, Kind::Classic].into_iter().chain(scenes()) {
+            let t = total(k, opts, None);
+            let p = played(k, opts, None);
+            assert_eq!(p, (t as f64 * 0.85).round() as u64, "{k:?}");
+            assert!(story(p, None).abs_diff(t) <= 1, "{k:?}");
+            assert_eq!(played(k, opts, Some(4000)), total(k, opts, Some(4000)));
+            assert_eq!(story(1234, Some(4000)), 1234);
+        }
     }
 
     #[test]

@@ -146,12 +146,12 @@ impl Splashes {
         for n in 0..10_000u64 {
             let seed = self.seed.wrapping_add(n);
             let k = self.kind(n).fit(w, h);
-            let total = splash::total(k, self.opts(cfg, seed), len);
+            let total = splash::played(k, self.opts(cfg, seed), len);
             if total == 0 {
                 return (k, seed, None);
             }
             if t < total + GAP {
-                return (k, seed, (t < total).then_some(t));
+                return (k, seed, (t < total).then(|| splash::story(t, len)));
             }
             t -= total + GAP;
         }
@@ -270,7 +270,7 @@ pub(crate) fn draw(d: &Dash, f: &mut Frame, area: Rect, g: &Splashes) {
         let set = p.is(&g.before.0);
         let secs = match p {
             Pick::One(k) if *k != Kind::Off => {
-                format!("{:.1}s", splash::total(*k, opts, len) as f64 / 1000.0)
+                format!("{:.1}s", splash::played(*k, opts, len) as f64 / 1000.0)
             }
             _ => String::new(),
         };
